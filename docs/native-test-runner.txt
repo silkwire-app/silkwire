@@ -1,0 +1,78 @@
+Native command tests inside a Staging workspace
+
+A macOS Seatbelt process cannot apply a second profile. NativeBuilder now keeps
+its command launcher in the host and supplies a short-lived command broker to
+its sandboxed command. Nested NativeBuilder instances submit launch requests to
+that host; they never launch an unconfined shell as a fallback.
+
+The host rebuilds the Seatbelt profile itself. It accepts only canonical,
+existing directories below its own worktree or scratch root; it does not accept
+profiles or environment dictionaries from a request. Each nested command gets
+its own write roots, immutable Git metadata, denied network/Mach/Apple events,
+and read exclusions for the enclosing worktree/scratch outside its own roots.
+The original home-directory read boundary still applies. Broker responses and
+endpoint ancestors are read-only to commands. Requests have size, count and
+concurrency bounds (64 KiB, 128 requests per outer command, 8 in flight).
+
+SILKWIRE_COMMAND_BROKER is only an address. It is consulted only in a kernel
+sandbox. A missing, invalid or unavailable broker fails closed; it never skips
+Seatbelt. SILKWIRE_COMMAND_SANDBOX no longer controls compilation or launching.
+The build/test scripts ask the OS about the current process before disabling
+Swift's redundant macro sandbox. An unavailable query retains the normal
+compiler behavior and the host boundary remains mandatory. The scripts resolve
+Swift/SDK paths from the system-owned Xcode selection and invoke swiftc with an
+explicit SDK, avoiding sandboxed xcrun/xcodebuild discovery. The host supplies the
+same selected SDK to command shims. No toolchain is installed or downloaded.
+
+Inside Seatbelt, private scratch leaves are allocated beneath an inherited,
+canonical OS temporary directory owned by the current user with mode 0700.
+The broker's private parent is a fallback when a test intentionally replaces
+TMPDIR. Neither option grants filesystem permission: the enclosing host profile
+still enforces writes. Outside Seatbelt the existing /private/tmp allocator is
+retained. The test script reads its explicitly inherited TMPDIR before asking
+Foundation, which can return the user's unrelated temporary directory.
+
+Cancellation is bidirectional. Stopping a nested workspace asks the host to
+terminate its real process group and return the actual exit status. Stopping or
+exiting the outer command cancels every broker launch and waits for termination.
+No command endpoint survives the outer command. Receipts retain nested root,
+launcher, isolation and exit/cancellation evidence. As before, the subprocess
+primitive owns POSIX process groups; this is not a virtual machine or a defense
+against deliberate daemonization into another session.
+
+Verification commands (no installation or live providers):
+  swift Scripts/test.swift BrokerRunningStopReviewTests MemoryProtocolTests NativeRunnerTests
+  swift Scripts/test.swift --reuse-core NativeRunnerSourceTests
+  swift Scripts/test.swift --reuse-core --native-acceptance
+  swift Scripts/build.swift --staging
+  swift Scripts/build.swift --verification
+
+Run NativeRunnerSourceTests from a clean, committed checkout. It clones that
+exact revision and compiles/runs Scripts/test.swift inside an actual host
+command sandbox. NativeRunnerTests additionally tests malicious roots/endpoints,
+protected reads and writes, response tampering and outer-command cancellation.
+The executing-command regression was recovered from receipt E944D84B, rather
+than reconstructed from an older source. Its exit-code check accepts NSNumber
+so both in-memory Int32 and decoded JSON numeric values are handled; every
+original behavioral assertion is retained.
+
+Memory controls
+
+TeamMemory uses the same JSON-aware parser for extraction and reply display.
+Valid inline or multiline REMEMBER controls disappear from streaming, completed,
+recovered and historical transcript rows, including Copy and search highlights.
+A possible partial token is held until disambiguated. Protocol bytes remain in
+the stream buffer until terminal processing; a partial stream does not save notes.
+Duplicate markers/replayed terminal text do not create duplicate Project notes
+or Alexandria pages. The existing five-note reply limit remains, with a visible
+omission count; malformed controls remain visible for diagnosis. No historical
+reply is migrated or saved merely because it was displayed.
+
+Memory lifecycle persistence
+
+Normal dispatch refreshes the briefing in memory and includes it in the existing
+asynchronous durable turn save before any provider dispatch. Completed/recovered
+reply events enqueue the memory save on the serial writer instead of doing an
+extra synchronous whole-library write. Explicit refresh/capture calls retain
+their existing synchronous default. The 332 MiB sustained-persistence test covers
+main-actor responsiveness and verifies that dispatch still follows durability.

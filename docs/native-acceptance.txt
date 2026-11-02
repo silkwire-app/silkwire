@@ -1,0 +1,75 @@
+Native acceptance follow-up for installed Staging 51e7c0f
+
+Changes
+
+Workspace TMPDIR now comes from the OS temporary area at /private/tmp, resolved to
+its real path and created exclusively with mode 0700. Each random leaf is
+private to its creating user. It does not inherit the app's TMPDIR and is no longer under Team Workspaces in Application Support.
+The receipt records temporaryPath. Commands retain their existing sandbox;
+only the location of their permitted scratch directory changes. Diagnostic
+copies remain outside the Git worktree, in that private scratch directory.
+Scratch data is temporary and may be removed by macOS; receipts, patches and
+transfer bundles remain in the existing workspace storage.
+
+DARWIN_USER_TEMP_DIR confstr can echo TMPDIR; it is deliberately not used to
+choose the host location. The fixed /private/tmp parent is resolved before
+mkdtemp creates an unpredictable private leaf, never through the /tmp alias.
+
+The standalone test runner supplies a separate, canonical synthetic fixture
+root to every child process. It accepts inherited scratch storage only inside
+OS temporary areas and otherwise uses canonical /private/tmp temporary storage.
+It sets SILKWIRE_DEV_DATA to synthetic storage and disables user Git config.
+It does not change production protected-root or link checks. Fixtures that
+construct roots with POSIX realpath. Foundation URL normalization can shorten
+/private/tmp back to /tmp, so it is not used for fixture canonicalization.
+The socket fixture binds to IPv4 loopback only; the pasteboard test uses its
+own named pasteboard and releases it even if a thrown error ends the test.
+
+Run all eight native suites with:
+  swift Scripts/test.swift --native-acceptance
+
+The runner does not elevate privileges or escape an enclosing sandbox. Each
+suite gets a complete compiler/executable log and a JSON result under
+output/tests/results/<run-id>. It continues after failures and preserves
+signal-derived exit codes. A non-executed suite is marked executed=false.
+The common core must compile successfully before suites can execute.
+--reuse-core still checks the source/options fingerprint before reusing it.
+
+WorkspaceTemporaryTests checks the production scratch allocator with a
+protected inherited TMPDIR, canonical real paths, private permissions, and
+the production Project broker. It also verifies that protected and linked
+roots remain refused. StagingTests and RecursiveProjectAccessTests cover
+existing isolation and recursive grant behavior.
+
+TrustedRoomTests keeps both original assertions unchanged. If the exact
+three-speaker assertion fails, it writes speaker-failure.json and prints
+host error continuations. If a finished speaker receipt is failed rather
+than reviewable, it prints that receipt before the owner-bound assertion.
+This distinguishes sandbox/preflight failures from actual room assertions.
+
+Native acceptance lane considered; not enabled in this change
+
+Keep WORK_PROJECT run sandboxed. A separate host-owned Native acceptance
+button/action could offer exactly this prompt for a specific reviewed head:
+  Run Silkwire native acceptance for <head> outside the command sandbox?
+  Uses a fresh clone, synthetic data and a named test pasteboard. Allow / Deny
+
+Allow would authorize one run of /usr/bin/swift Scripts/test.swift
+--native-acceptance, with fixed arguments, from a new throwaway clone of the
+reviewed full-history bundle. Verify its SHA-256, exact head and clean source
+before prompting and recheck after Allow. Deny, Stop, grant revocation, room
+change or any source change invalidates the request; never replay it.
+
+The host must own this action, the prompt and its single-use authorization.
+An agent marker, repository text, command argument or environment variable
+must not approve it. The fixed script compiles repository code, so approving
+a path alone is insufficient: the approval must cover the exact reviewed
+source revision and script hash. Log the decision, source identity, fixture
+root, script hash, exact arguments and all per-suite results. Use a minimal
+environment without provider tokens, user Git config or real library paths.
+No install/build-launch step, account connection, push or publication belongs
+to this action. Existing owned-process cancellation should cover descendants.
+
+This design needs host UI, single-use authorization/revocation wiring and an
+unsandboxed end-to-end acceptance test. Those are not silently substituted
+with an environment switch or an arbitrary shell escape in this patch.

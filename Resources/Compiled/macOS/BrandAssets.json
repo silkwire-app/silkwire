@@ -1,0 +1,18 @@
+{
+  "actoolPath" : "\/Applications\/Xcode.app\/Contents\/Developer\/usr\/bin\/actool",
+  "actoolSha256" : "8800039ecec032515c048f002ecfbbadaf1518c90f178eba5b430de278a3720f",
+  "compiledFiles" : {
+    "Assets.car" : "8e71fe17efa21f4f06474b8d8b7686018a437b5a6d3ed5759866c9a407f0e9bd",
+    "Silkwire.icns" : "6907684c3f0cf4ee1d145af9a1e8de06aa15b51079ab603a7412f91580953470"
+  },
+  "generator" : "Scripts\/regenerate-brand-assets.swift",
+  "minimumOS" : "14.0",
+  "platform" : "macosx",
+  "schema" : 1,
+  "sdkVersion" : "27.0",
+  "sourceFiles" : {
+    "Colors.xcassets\/AccentColor.colorset\/Contents.json" : "ba2c203db3e2120d7e20efe17aceae2d40bc4a382c89e670852131bf4a260f77",
+    "Colors.xcassets\/Contents.json" : "10e3b5dc202f1cd9fad1f688c8fc9fe9e9669bf3f8295e67d216b10fd99b6f49",
+    "SilkwireAppIcon-1024.png" : "23a662b3e7a960dc4f80166ae09f1253857dad7ae8a148fbe82506657766c157"
+  }
+}

@@ -1,0 +1,49 @@
+Trusted Project access — correction after the outside review
+
+The ab94117 candidate left two product limits unresolved: explicit folder grants
+were still restricted to ~/Projects or private Staging Sources, and execution
+could start only at a granted root, with no outside Git bundle import. Merely
+pasting a Codex outputs path did not grant access, and installing that candidate
+alone would not make the handoff work.
+
+A Project folder grant now covers its descendants. The user can select the whole
+~/Projects folder once, including all ordinary source subfolders, or select a
+specific folder elsewhere such as Documents/Codex/.../outputs. Roots are stored
+as bookmarks. A pasted path or a bundle never creates authority. The picker,
+store validation, resolved room grants and execution coordinator use the same
+root policy. Current capability inventories include the root path so teammates
+can map a supplied absolute filename to the appropriate relative path.
+
+One saved Trusted Staging choice plus a source/import grant allows ordinary
+private edits/builds/tests and imports without repeated per-operation prompts.
+The team can begin a private workspace at a repository below Projects with:
+  <<WORK_PROJECT {"action":"begin","folderId":"id","path":"team/repository"}>>
+Reading files mid-work still leaves that workspace active. Distinct repositories
+reserve their own scopes in the task board rather than locking all of Projects.
+
+An outside review bundle in a source/import folder can start a workspace with:
+  <<WORK_PROJECT {"action":"begin","folderId":"id","bundle":"candidate.bundle","revision":"40-character commit","sha256":"64-character hash"}>>
+The host reads only the relative granted input, checks its hash, verifies a
+self-contained Git bundle, checks the exact advertised commit and restores into
+a new private directory. It runs no bundle hooks, user Git templates or global
+Git configuration. It never asks the user to clone the bundle manually, resets
+an existing checkout, substitutes an older source, installs an app or imports
+permissions from the bundle. Revocation and Stop are checked before each import
+Git operation and before starting the private workspace. A read-only root cannot
+start imports or execution.
+
+Private workspace source edits do not update original project files. Installation,
+original-library/account changes and publishing/pushing remain separate actions.
+Jason chose private copies for review when asked about this distinction. The
+standing Project grant therefore does not authorize direct project-file writes.
+
+NativeScopedRoot continues to exclude credentials, hidden paths, dependency/build
+output, binary text reads and links. Broad home roots and app/system libraries
+are ineligible; Staging diagnostic snapshots use their dedicated copy capability.
+The whole Projects grant is recursive within those enforced file boundaries.
+
+Verification must distinguish working read/import/persistence tests from the
+platform's blocked nested sandbox-exec and security-scoped bookmark services.
+A passing import test does not prove native builds/tests completed. No real
+app installation, live Project grant or original-library modification occurs in
+the outside-Codex test fixtures.

@@ -1,0 +1,49 @@
+Staging reliability and Project standing access
+
+Base: 55495febef1887c57077df296e03863d04f0af80, recovered from the preserved 6D8E8504 workspace. Its clean source digest is 3809a788eda5720c876c5915d537d5747fac70aaa4be9b4ee0e2cda67173e59a, matching the installed Staging Info.plist and installation receipt. The installed executable SHA-256 is e42325ed824fac5c0283c15fa61e254348cea1650afbe0a18098a4b2deb40832. The preserved running-source branch is preserved/installed-staging-55495feb. No older source was substituted.
+
+The private freeze candidate cc7f9d07c7fc2ec1a5a38b7afd5fbb1a4e30f7b2 was imported from its verified bundle (SHA-256 520a233958674b5d89204e94855456152403623f49dd29e8f0c326a2ad831604) and merged onto the running source. Send was adapted to the newer queue, Pass, screenshots, focused-chat and two-column implementation. An additional guard prevents duplicate Send from queueing the still-visible draft while its first save is pending.
+
+Save behavior
+
+Typing, reply events, rejection, connection failure, queued additions, access evidence and REMEMBER notes coalesce background snapshots. The serial persistence queue orders validation, JSON encoding and atomic writes. Submitted messages reserve a turn before awaiting a successful durable write. Cancellation, disconnection, revocation and stale room generations prevent late dispatch. Acceptance removes only submitted attachment IDs and clears text only if the draft still matches its submitted value. A failed save fences sending and retains the draft.
+
+The existing synchronous save API remains for startup, shutdown and transactional edits/switches that require a synchronous success result. Those paths can still wait on disk. The responsiveness claim covers send, typing and reply/rejection/connection lifecycle under the measured fixture; it is not a claim that all application operations are asynchronous. Switching is refused while a send is reserved; closing the room cancels it.
+
+The Eve watchdog uses a shared monotonic liveness policy. A delayed UI wake gets five seconds for queued frames, once per silence. Only a real incoming frame allows another grace period. Deterministic tests exercise the exact policy called by NativeEveTransport, including recovery and a dead connection.
+
+Standing access
+
+Fresh and copied Projects require an explicit trustedStaging=true setting plus an eligible connected source's private editing grant. Existing explicit grants remain. The Project settings explanation covers read/edit/build/test and Project-scoped diagnostic copies; revocation is available while work runs. Revocation closes active and warm rooms before awaiting persistence, stops private engines, and causes queued broker requests to recheck current grants. A failed revocation save is visibly reported as a storage error; no persistence across a failed disk write is promised.
+
+Native runtime tools remain disabled. WORK_PROJECT operations use the existing scoped broker and private repositories/worktrees. Command execution retains the production sandbox: no network, AppleEvents, unrelated home reads, or writes outside its worktree/tmp; protected Git metadata is not writable by commands. Consequential actions have no WORK_PROJECT execution route. Working-app installation, original libraries, account/sign-in changes, pushes and publishing require their separate explicit approval paths. Permission cannot be created by a transcript, source file or archived chat.
+
+Diagnostic copies
+
+WORK_PROJECT action diagnostic accepts no path or Project identity from the agent. The host selects the currently granted Project in the fixed Staging workspace snapshot and writes under the assigned workspace's private tmp/output/diagnostics, outside its Git source tree. Other Projects' conversations are excluded. Copied provider identities, folder grants and standing permissions are removed; the original is never written. Source/copy hashes and scope are recorded. Do not connect live providers against diagnostic fixtures.
+
+Project artifacts
+
+Finished source diffs, transfer bytes and recorded check outcomes are copied into a Project-specific artifact directory. Transfers are hash checked; task prompts, provider identities, folder grants, raw command output and private summaries are not copied. The host imports finished receipts only from its own Project room membership, including archived rooms. A different Project cannot look them up. Reading never invokes workspace finish. The recovered running source already had the READ_PROJECT-before-auto-finish guard; it was preserved.
+
+Prompt budget
+
+Each dispatched prompt records actual UTF-16 contributions for instructions/access descriptions, Project brief, saved notes, task/receipt context, current user input/attached text, history, current teammates' replies and joining overhead. Image bytes are recorded separately, not misrepresented as text characters or model tokens. Historical task-board details are fetched on demand. History is compacted, and optional notes/revision/receipt detail is shortened or omitted before rejecting a short message. Current permissions, the current request, attachments and the Project brief are preserved. Unavoidable overflow names required input after optional context removal.
+
+Reproducible checks
+
+SILKWIRE_COMMAND_SANDBOX=1 swift Scripts/test.swift SendSafetyTests ReliabilityAcceptanceTests PromptBudgetAcceptanceTests SustainedPersistenceTests RoomTests NativeEveTransportTests RefinementTests WorkroomTests
+
+Scripts/test.swift --reuse-core only reuses a compiled core after checking a SHA-256 of its exact core source files and compiler options. It refuses a stale cache. Additional suites can be selected without recompiling an unchanged core. Application source under test is optimized; fixture assertions remain enabled.
+
+NativeEveTransportTests uses an in-memory WebSocket boundary with the actual production handshake/RPC/recovery implementation. RefinementTests exercises the production pasteboard adapter with an in-memory clipboard. WorkroomTests uses ordinary persistent bookmarks for its migration/state purpose. OS service integration remains separate in NativeEveSocketTests, NativePasteboardTests and NativeBookmarkTests, with exact operation errors. A fixture pass is not a claim that those OS services or live providers were exercised.
+
+Future source recovery
+
+Clean Staging builds retain Contents/Resources/Source/source.bundle and manifest.json inside the signed bundle. The manifest binds the complete committed Git history at HEAD to the build's exact source digest. Modified Staging sources must be checkpointed before packaging; source changes during compilation fail the build. Project settings offers Recover exact installed Staging source. It verifies signature/provenance, restores a new independent directory and preserved/installed-<revision> branch, and checks revision/digest before connecting it read-only. It never resets another checkout or unfinished branch. SourceArchiveRoundTripTests verifies recovery from the actual signed candidate.
+
+Restore path and delivery
+
+This task installs nothing, replaces no app/library, and changes no account. Existing source workspaces and installed Staging remain in place. The review bundle includes the preserved running source and candidate branch, so it can be cloned locally for review without changing connected Project files. Existing StagingInstaller keeps and verifies full bundle backups for a separately approved replacement. Data migration backup/restore behavior remains covered by existing storage tests. Backups do not undo external publishing, Git pushes or remote account changes.
+
+Final revisions, build/test receipts, failures and verification limits are recorded outside this source tree in the task outputs, so recording a review result does not alter the source digest of the built candidate.

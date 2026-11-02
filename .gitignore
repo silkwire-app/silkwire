@@ -1,0 +1,13 @@
+.build/
+output/
+.DS_Store
+# Preserve existing design masters without changing or automatically publishing them.
+/DNS/
+/Design Elements/
+/silkwire-brand-kit/
+/*.zip
+/*.pdf
+/Silkwire - Homepage Mockup Notes.md
+/silkwire-home.html
+/silkwire-home_2.html
+.build-verification/
