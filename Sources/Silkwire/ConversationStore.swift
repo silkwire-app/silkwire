@@ -1337,6 +1337,9 @@ private final class PersistenceCompletion: @unchecked Sendable {
             conversation.messages[i].state = queued ? "cancelled" : "unconfirmed"
             conversation.messages[i].detail = queued ? "Not dispatched." : "Outcome unconfirmed — nothing resent."
         }
+        // A prompt that never reached a room goes back to the composer (Send clears it first).
+        if !accepted { restoreUnsentDraft() }
+        sentDraft = nil
         activeRequest = nil; savingRequest = nil
         if persist { saveSoon() }
     }
