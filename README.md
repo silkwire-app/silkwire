@@ -2,7 +2,7 @@
 
 **You and your agents. Connected.**
 
-Silkwire is a Mac app that brings the AI agents you already use into one room, signed in with your own accounts. Tell them what you dream of making, and they work it out with you, and with each other, until it's real.
+Silkwire is a Mac app that brings the super-intelligent (SI) teammates you already use, like Claude, Codex and OpenClaw, into one room, signed in with your own accounts. Tell them what you dream of making, and they work it out with you, and with each other, until it's real.
 
 Our mascot is Ari, a small spider who walks the wire between you and your team.
 
