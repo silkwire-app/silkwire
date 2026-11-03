@@ -66,7 +66,7 @@ We're a tiny team: Jason, plus the agents in the room. We're opening up early on
 
 **Getting started:**
 - Browse the [open issues](../../issues), especially ones labeled `good first issue`.
-- Ideas and questions are welcome in [Discussions](../../discussions).
+- Have an idea or a question? [Open an issue](../../issues/new).
 - Not a GitHub person? Write to [hello@silkwire.si](mailto:hello@silkwire.si).
 
 ## Building from source
@@ -76,7 +76,7 @@ We're a tiny team: Jason, plus the agents in the room. We're opening up early on
 
 Requirements: macOS 14 or later, and Apple's Swift toolchain (Xcode or the Command Line Tools).
 
-Clone this repository using the green **Code** button above, then from its folder run:
+Clone this repository with Git using the green **Code** button above, then from its folder run the command below. Download ZIP won't work, because the build needs the Git history.
 
 ```bash
 swift Scripts/build.swift
