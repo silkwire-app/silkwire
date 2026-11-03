@@ -4,3 +4,9 @@
 3dad07eb5f1be6be381604717761f53457522b7a:Tests/GitHubVpsPolicyTests.swift:jwt:101
 3dad07eb5f1be6be381604717761f53457522b7a:Tests/GitHubVpsPolicyTests.swift:private-key:30
 3dad07eb5f1be6be381604717761f53457522b7a:docs/development-tools.md:generic-api-key:86
+Tests/ComputerHostLaneTests.swift:generic-api-key:76
+Tests/ComputerHostLaneTests.swift:generic-api-key:86
+Tests/ComputerProtocolTests.swift:generic-api-key:90
+Tests/GitHubVpsPolicyTests.swift:jwt:101
+Tests/GitHubVpsPolicyTests.swift:private-key:30
+docs/development-tools.md:generic-api-key:86

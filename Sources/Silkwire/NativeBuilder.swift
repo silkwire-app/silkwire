@@ -206,9 +206,64 @@ import Darwin
     private func git(_ item: Run, _ arguments: [String], directory: URL? = nil, evidence: Bool = false) async throws -> CommandResult {
         // Fixed host Git operations are sandboxed too: private cleanup never
         // grants its exception to an unsandboxed preparation subprocess.
-        let profile = Self.privatePreparationSandbox(writable: [item.root, item.temporary], readable: [item.source])
+        let profile = Self.privatePreparationSandbox(writable: [item.root, item.temporary], readable: [item.source] + Self.linkedGitMetadata(for: item.source))
         let safe = ["-c","core.hooksPath=/dev/null","-c","core.fsmonitor=false","-c","maintenance.auto=false","-c","gc.auto=0","-c","protocol.file.allow=always"] + arguments
         return try await execute(item, executable: NativeSandboxState.isSandboxed ? "/usr/bin/git" : "/usr/bin/sandbox-exec", arguments: NativeSandboxState.isSandboxed ? safe : ["-p", profile, "/usr/bin/git"] + safe, directory: directory ?? item.source, limit: 262144, evidence: evidence)
+    }
+    /// A private agent workspace is a linked Git worktree: its `.git` is a small file
+    /// that points at metadata inside a sibling repository. The preparation sandbox
+    /// must be able to read that metadata, or every Git call fails with
+    /// "not a git repository" and no background run can ever start. Read-only, and
+    /// limited to that worktree's own gitdir and its common directory.
+    /// Workspace stores the host itself created (Team Workspaces/<mode>). Registered by the
+    /// host at launch; nothing read from a repository can add to this list.
+    private static let hostStoresLock = NSLock()
+    nonisolated(unsafe) private static var hostStores: [String] = []
+    static func registerHostWorkspaceStore(_ store: URL) {
+        let path = store.standardizedFileURL.resolvingSymlinksInPath().path
+        hostStoresLock.lock(); defer { hostStoresLock.unlock() }
+        if !hostStores.contains(path) { hostStores.append(path) }
+    }
+    static func linkedGitMetadata(for source: URL, hostStores stores: [URL]? = nil) -> [URL] {
+        // Authority comes from the host, not from files (Codex review, Nov 3). The host creates
+        // every private workspace at exactly <store>/<conversation>/<agent>/<run>/worktree with
+        // its repository beside it at <run>/repository. So the only metadata this can ever allow
+        // is <run>/repository/.git and its worktrees/worktree entry, and only when <store> is
+        // one the host registered. The .git file, back-pointer and commondir must then agree
+        // with that host-derived layout; they can veto it but never widen it.
+        let files = FileManager.default
+        func canonical(_ url: URL) -> URL { url.standardizedFileURL.resolvingSymlinksInPath() }
+        func isDirectory(_ url: URL) -> Bool { var d: ObjCBool = false; return files.fileExists(atPath: url.path, isDirectory: &d) && d.boolValue }
+        func firstLine(_ url: URL) -> String? {
+            guard let text = try? String(contentsOf: url, encoding: .utf8),
+                  let line = text.split(whereSeparator: { $0.isNewline }).first else { return nil }
+            let value = line.trimmingCharacters(in: .whitespaces)
+            return value.isEmpty ? nil : value
+        }
+        let storePaths: [String]
+        if let stores { storePaths = stores.map { canonical($0).path } }
+        else { hostStoresLock.lock(); storePaths = hostStores; hostStoresLock.unlock() }
+        let worktree = canonical(source)
+        guard worktree.lastPathComponent == "worktree" else { return [] }
+        let run = worktree.deletingLastPathComponent()
+        let store = run.deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        guard storePaths.contains(store.path), store.pathComponents.count >= 3 else { return [] }
+        let common = canonical(run.appendingPathComponent("repository/.git"))
+        let gitDir = canonical(common.appendingPathComponent("worktrees/worktree"))
+        // The derived paths must still be exactly where the host put them (no symlink detours).
+        guard common.path == run.path + "/repository/.git", gitDir.path == common.path + "/worktrees/worktree",
+              isDirectory(common), isDirectory(gitDir) else { return [] }
+        let marker = worktree.appendingPathComponent(".git")
+        var markerIsDirectory: ObjCBool = false
+        guard files.fileExists(atPath: marker.path, isDirectory: &markerIsDirectory), !markerIsDirectory.boolValue,
+              let line = firstLine(marker), line.hasPrefix("gitdir:") else { return [] }
+        let raw = line.dropFirst("gitdir:".count).trimmingCharacters(in: .whitespaces)
+        guard !raw.isEmpty, canonical(raw.hasPrefix("/") ? URL(fileURLWithPath: raw) : worktree.appendingPathComponent(raw)).path == gitDir.path else { return [] }
+        guard let back = firstLine(gitDir.appendingPathComponent("gitdir")),
+              canonical(back.hasPrefix("/") ? URL(fileURLWithPath: back) : gitDir.appendingPathComponent(back)).path == marker.path else { return [] }
+        guard let commonText = firstLine(gitDir.appendingPathComponent("commondir")),
+              canonical(commonText.hasPrefix("/") ? URL(fileURLWithPath: commonText) : gitDir.appendingPathComponent(commonText)).path == common.path else { return [] }
+        return [gitDir, common]
     }
     static func privatePreparationSandbox(writable: [URL], readable: [URL] = []) -> String {
         let quote: (String) -> String = { String(data: try! JSONSerialization.data(withJSONObject: $0, options: [.fragmentsAllowed]), encoding: .utf8)! }

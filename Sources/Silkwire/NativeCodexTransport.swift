@@ -34,7 +34,7 @@ private struct NativeRPCFailure: LocalizedError {
         var environment = nativeProviderEnvironment()
         environment["CODEX_HOME"] = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex").path
         if let runtimeSandbox { arguments = ["-p", runtimeSandbox, executable] + arguments }
-        process = try NativeProcess(executable: runtimeSandbox == nil ? executable : "/usr/bin/sandbox-exec", arguments: arguments, directory: directory, environment: environment, stdout: { [weak self] in self?.receive($0) }, stderr: { _ in /* Never forward private runtime diagnostics. */ }, onExit: { [weak self] _ in self?.processEnded() })
+        process = try NativeProcess(executable: runtimeSandbox == nil ? executable : "/usr/bin/sandbox-exec", arguments: arguments, directory: directory, environment: environment, stdout: { [weak self] in self?.receive($0) }, stderr: { _ in /* Never forward private runtime diagnostics. */ }, onExit: { [weak self] code in ConnectionLog.record(agent: "codex", event: "process-exit", detail: "Codex helper exited with code \(code)"); self?.processEnded() })
     }
     func write(_ message: [String: Any]) throws {
         guard !closed, let process else { throw nativeFailure("Codex is disconnected.") }

@@ -36,6 +36,8 @@ import Foundation
         var computerFailure: String?
         var computerActions = 0
         var computerCorrections = 0
+        /// Jason stopped this teammate alone (talk any time); the rest of its turn goes on.
+        var stopRequested = false
         init(_ agent: String) { self.agent = agent }
     }
     final class Turn {
@@ -53,6 +55,15 @@ import Foundation
         var runs: [String: Run] = [:]
         var openFloor = false
         var starting = false
+        /// Talk any time: a teammate still busy with an earlier message gets this one as soon
+        /// as they finish, instead of the send being refused.
+        var waitForBusy = false
+        /// Teammates this turn is waiting for, in the order they were due.
+        var waiting: [String] = []
+        /// Sequential targets Jason stopped before their turn came; they are skipped.
+        var skipped: Set<String> = []
+        /// The room's reply log position when this turn's history was taken.
+        var logMark = 0
         func owns(_ run: Run) -> Bool { runs[run.agent] === run }
         var completedReplies: [[String: String]] = []
         init(id: String, text: String, targets: [String], attachments: [Attachment], history: [[String: String]], total: Int) {
@@ -92,9 +103,49 @@ import Foundation
     private func turnHolding(_ agent: String) -> Turn? {
         turns.last { turn in
             if let run = turn.runs[agent] { return !Self.idle(run) }
-            return turn.targets.dropFirst(turn.index).contains(agent)
+            return turn.waiting.contains(agent) || (turn.targets.dropFirst(turn.index).contains(agent) && !turn.skipped.contains(agent))
         }
     }
+    /// The turn whose reply or tool step this teammate is in right now.
+    private func turnRunning(_ agent: String) -> Turn? {
+        turns.last { $0.runs[agent].map { !Self.idle($0) } ?? false }
+    }
+    /// Whether this teammate must finish something else before starting `turn`: a reply
+    /// still running anywhere, or an earlier message still due to them. Each teammate takes
+    /// messages one at a time, oldest first.
+    private func busyElsewhere(_ agent: String, before turn: Turn) -> Bool {
+        guard let mine = turns.firstIndex(where: { $0 === turn }) else { return false }
+        for (index, other) in turns.enumerated() where other !== turn {
+            if let run = other.runs[agent], !Self.idle(run) { return true }
+            guard index < mine else { continue }
+            if other.waiting.contains(agent) { return true }
+            if !other.openFloor, other.targets.dropFirst(other.index).contains(agent), !other.skipped.contains(agent) { return true }
+        }
+        return false
+    }
+    /// Starts every waiting teammate who is now free, oldest message first.
+    private var pumping = false
+    private func pump() {
+        guard !pumping, isOpen else { return }
+        pumping = true; defer { pumping = false }
+        var progressed = true
+        while progressed {
+            progressed = false
+            for turn in turns where live(turn) && !turn.cancelled {
+                for agent in turn.waiting where !busyElsewhere(agent, before: turn) {
+                    turn.waiting.removeAll { $0 == agent }
+                    start(turn, agent: agent)
+                    progressed = true
+                    break
+                }
+                if progressed { break }
+            }
+        }
+    }
+    /// Completed replies across every turn, so a teammate who starts a message late
+    /// (after finishing an earlier one) sees what was said in the meantime.
+    private var replyLog: [(seq: Int, request: String, reply: [String: String])] = []
+    private var replySeq = 0
     private func settle(_ turn: Turn) { turns.removeAll { $0 === turn } }
     private let trustedStorage: URL?
     private let trustedSandbox: WorkspaceEnvironment
@@ -278,7 +329,11 @@ import Foundation
                 emit(["type": "backgroundJob", "requestId": value["requestId"] as? String ?? "", "result": result])
             case "connections": try await connections(value["requestId"] as? String ?? "")
             case "send": try send(value)
-            case "stop": await stop()
+            case "stop":
+                if let agent = value["agent"] as? String, !agent.isEmpty {
+                    guard agents.contains(agent) else { throw nativeFailure("Unknown teammate.") }
+                    await stop(agent: agent)
+                } else { await stop() }
             case "stopPrevious": try await stopPrevious(value["agent"] as? String ?? "")
             case "reconnectAgent": try await reconnect(value)
             case "disconnectAgent": try disconnectAgent(value["agent"] as? String ?? "")
@@ -554,8 +609,10 @@ import Foundation
             let who = offline.map { names[$0] ?? $0 }.joined(separator: ", ")
             throw nativeFailure("Not sent: \(who) \(offline.count == 1 ? "is" : "are") disconnected. Reconnect \(who) or leave them out, then Send again.")
         }
-        // Talking never waits on working: only a teammate who is still busy blocks a message to them.
-        let busy = selected.filter { turnHolding($0) != nil }
+        // Talking never waits on working: only a teammate who is still busy blocks a message to
+        // them, and with waitForBusy (talk any time) not even that: they get it when they finish.
+        let waitForBusy = value["waitForBusy"] as? Bool == true
+        let busy = waitForBusy ? [] : selected.filter { turnHolding($0) != nil }
         guard busy.isEmpty else {
             let who = busy.map { names[$0] ?? $0 }.joined(separator: ", ")
             throw nativeFailure("Not sent: \(who) \(busy.count == 1 ? "is" : "are") still working on an earlier message. Leave them out to keep chatting, or press Stop.")
@@ -590,6 +647,7 @@ import Foundation
         }
         // Open floor (turn-free chat) is opt-in per request and needs 2+ teammates.
         turn.openFloor = value["openFloor"] as? Bool == true && selected.count > 1 && focusedAgent == nil
+        turn.waitForBusy = waitForBusy; turn.logMark = replySeq
         turns.append(turn); emit(["type": "accepted", "requestId": id, "openFloor": turn.openFloor])
         if turn.openFloor {
             turn.starting = true; turn.index = turn.targets.count
@@ -606,12 +664,15 @@ import Foundation
             && run.computerRequest == nil && run.computerFailure == nil
     }
     private func next(_ turn: Turn) {
+        // Whatever just ended may free a teammate another message is waiting for.
+        defer { pump() }
         guard live(turn) else { return }
         if turn.openFloor {
             // Open floor: every teammate already started. Settle only once all are done.
-            guard !turn.starting, turn.runs.values.allSatisfy(Self.idle) else { return }
+            guard !turn.starting, turn.waiting.isEmpty, turn.runs.values.allSatisfy(Self.idle) else { return }
             settle(turn); emit(["type": "settled", "requestId": turn.id]); return
         }
+        while turn.index < turn.targets.count, turn.skipped.contains(turn.targets[turn.index]) { turn.index += 1 }
         if turn.cancelled || turn.index >= turn.targets.count { settle(turn); emit(["type": "settled", "requestId": turn.id]); return }
         let agent = turn.targets[turn.index]; turn.index += 1
         start(turn, agent: agent)
@@ -621,6 +682,15 @@ import Foundation
         guard let seat = seats[agent], seat.live, seat.state == "connected" else {
             emit(["type": "finished", "agent": agent, "requestId": turn.id, "status": "cancelled", "message": "Teammate disconnected before dispatch."]); next(turn); return
         }
+        // Talk any time: still busy with an earlier message, so this one waits its turn.
+        if turn.waitForBusy, busyElsewhere(agent, before: turn) {
+            if !turn.waiting.contains(agent) { turn.waiting.append(agent) }
+            emit(["type": "waiting", "agent": agent, "requestId": turn.id]); return
+        }
+        // Replies finished since this message was sent (it waited, or another message ran
+        // alongside it) are earlier conversation now; add them before the prompt is built.
+        let late = replyLog.filter { $0.seq > turn.logMark && $0.request != turn.id }.map(\.reply)
+        turn.history += late; turn.logMark = replySeq
         let run = Run(agent); run.displaying = !reader.hasReadableResources && trusted?.available != true && !webEnabled && computer == nil; turn.runs[agent] = run
         emit(["type": "started", "agent": agent, "requestId": turn.id])
         var context = turn.history
@@ -630,11 +700,13 @@ import Foundation
         run.contextEvent = ["components": plan.components, "promptCharacters": plan.text.utf16.count, "imageAttachmentBytes": turn.attachments.filter(\.isImage).reduce(0) { $0 + $1.data.count }, "type": "context", "agent": agent, "requestId": turn.id, "supplied": gauge.verbatim, "omitted": gauge.omitted, "total": turn.total + turn.history.count - turn.initialHistoryCount, "shortened": gauge.level == .compacted || gauge.trimmed > 0, "capabilityHash": NativeScopedRoot.sha256(Data(reader.capabilities.utf8)), "folderCount":grantIDs.count, "compacted": gauge.level == .compacted, "condensed": gauge.condensed, "trimmed": gauge.trimmed, "notice": gauge.notice ?? ""]
         dispatch(turn, run: run, seat: seat, text: plan.text, attachments: turn.attachments.filter(\.isImage))
     }
+    /// Stopped: the whole turn (room Stop) or just this teammate (their own Stop).
+    private func halted(_ turn: Turn, _ run: Run) -> Bool { turn.cancelled || run.stopRequested }
     private func dispatch(_ turn: Turn, run: Run, seat: Seat, text: String, attachments: [Attachment] = []) {
         let token = generation
         Task { @MainActor [weak self] in
             guard let self, self.current(seat, token), self.live(turn), turn.owns(run), !Task.isCancelled else { return }
-            if turn.cancelled {
+            if self.halted(turn, run) {
                 run.acknowledged = true
                 if run.done { self.advance(turn, run: run, seat: seat) }
                 else { self.finish(turn, run: run, seat: seat, status: "interrupted", message: "Stopped before dispatch.") }
@@ -661,11 +733,11 @@ import Foundation
         let request = run.readRequest ?? NativeProjectReadRequest(action:"invalid")
         let protocolFailure = run.readFailure
         run.readRequest = nil; run.readFailure = nil
-        if turn.cancelled { emit(["type": "finished", "agent": run.agent, "requestId": turn.id, "status": "interrupted"]); next(turn); return }
+        if halted(turn, run) { emit(["type": "finished", "agent": run.agent, "requestId": turn.id, "status": "interrupted"]); next(turn); return }
         let token = generation
         run.reading = true
         run.brokerTask = Task { @MainActor [weak self] in
-            guard let self, self.current(seat, token), self.live(turn), turn.owns(run), !turn.cancelled, !Task.isCancelled else { return }
+            guard let self, self.current(seat, token), self.live(turn), turn.owns(run), !self.halted(turn, run), !Task.isCancelled else { return }
             var result: [String: Any]
             do {
                 if let protocolFailure { throw nativeFailure(protocolFailure) }
@@ -683,7 +755,7 @@ import Foundation
             catch { result = ["ok": false, "error": error.localizedDescription] }
             guard self.current(seat, token), self.live(turn), turn.owns(run), !Task.isCancelled else { return }
             run.reading = false; run.brokerTask = nil
-            if turn.cancelled { emit(["type":"finished","agent":run.agent,"requestId":turn.id,"status":"interrupted"]); next(turn); return }
+            if halted(turn, run) { emit(["type":"finished","agent":run.agent,"requestId":turn.id,"status":"interrupted"]); next(turn); return }
             if ["artifact", "diff"].contains(request.action), result["ok"] as? Bool == true {
                 emit(["type":"artifactAccess","agent":seat.agent,"requestId":turn.id,"artifactId":result["artifactId"] ?? "","sha256":result["sha256"] ?? ""])
             }
@@ -718,11 +790,11 @@ import Foundation
     private func advanceWeb(_ turn: Turn, run: Run, seat: Seat) {
         let request = run.webRequest, failure = run.webFailure
         run.webRequest = nil; run.webFailure = nil
-        if turn.cancelled { emit(["type": "finished", "agent": run.agent, "requestId": turn.id, "status": "interrupted"]); next(turn); return }
+        if halted(turn, run) { emit(["type": "finished", "agent": run.agent, "requestId": turn.id, "status": "interrupted"]); next(turn); return }
         let token = generation, policy = webPolicy, storage = trustedStorage?.appendingPathComponent(roomID).appendingPathComponent("Web Inspections")
         run.reading = true
         run.brokerTask = Task { @MainActor [weak self] in
-            guard let self, self.current(seat, token), self.live(turn), turn.owns(run), !turn.cancelled, !Task.isCancelled else { return }
+            guard let self, self.current(seat, token), self.live(turn), turn.owns(run), !self.halted(turn, run), !Task.isCancelled else { return }
             var result: [String: Any]
             var screenshot: Data?
             let inspectionID = UUID().uuidString
@@ -741,7 +813,7 @@ import Foundation
             } catch { result = ["ok": false, "operation": "web inspection", "path": "", "error": NativeBuilder.scrub(error.localizedDescription)] }
             guard self.current(seat, token), self.live(turn), turn.owns(run), !Task.isCancelled else { return }
             run.reading = false; run.brokerTask = nil
-            if turn.cancelled { self.emit(["type": "finished", "agent": run.agent, "requestId": turn.id, "status": "interrupted"]); self.next(turn); return }
+            if self.halted(turn, run) { self.emit(["type": "finished", "agent": run.agent, "requestId": turn.id, "status": "interrupted"]); self.next(turn); return }
             var preview: [String: Any] = ["type": "webInspection", "agent": run.agent, "requestId": turn.id, "inspectionId": inspectionID, "result": result.filter { $0.key != "text" && $0.key != "links" }]
             if let screenshot, screenshot.count <= 2 * 1024 * 1024 { preview["screenshot"] = screenshot.base64EncodedString() }
             self.emit(preview)
@@ -754,11 +826,11 @@ import Foundation
     private func advanceComputer(_ turn: Turn, run: Run, seat: Seat) {
         let request = run.computerRequest, failure = run.computerFailure
         run.computerRequest = nil; run.computerFailure = nil
-        if turn.cancelled { computer?.runEnded(agent: run.agent); emit(["type": "finished", "agent": run.agent, "requestId": turn.id, "status": "interrupted"]); next(turn); return }
+        if halted(turn, run) { computer?.runEnded(agent: run.agent); emit(["type": "finished", "agent": run.agent, "requestId": turn.id, "status": "interrupted"]); next(turn); return }
         let token = generation, conversationID = roomID, roots = grantRoots
         run.reading = true
         run.brokerTask = Task { @MainActor [weak self] in
-            guard let self, self.current(seat, token), self.live(turn), turn.owns(run), !turn.cancelled, !Task.isCancelled else { return }
+            guard let self, self.current(seat, token), self.live(turn), turn.owns(run), !self.halted(turn, run), !Task.isCancelled else { return }
             var outcome: ComputerOutcome
             if let request, let computer = self.computer {
                 outcome = await computer.perform(request, agent: run.agent, conversationID: conversationID, projectRoots: roots) { [weak self] message in
@@ -768,7 +840,7 @@ import Foundation
             } else { outcome = ComputerOutcome(result: ["ok": false, "error": failure ?? ComputerRequest.correction], image: nil) }
             guard self.current(seat, token), self.live(turn), turn.owns(run), !Task.isCancelled else { return }
             run.reading = false; run.brokerTask = nil
-            if turn.cancelled { self.computer?.runEnded(agent: run.agent); self.emit(["type": "finished", "agent": run.agent, "requestId": turn.id, "status": "interrupted"]); self.next(turn); return }
+            if self.halted(turn, run) { self.computer?.runEnded(agent: run.agent); self.emit(["type": "finished", "agent": run.agent, "requestId": turn.id, "status": "interrupted"]); self.next(turn); return }
             var event: [String: Any] = ["type": "computerAction", "agent": run.agent, "requestId": turn.id, "result": outcome.result.filter { !["stdout", "stderr", "tree", "text"].contains($0.key) }]
             event["hasScreenshot"] = outcome.image != nil
             self.emit(event)
@@ -780,10 +852,10 @@ import Foundation
     private func advanceWorkspace(_ turn: Turn, run: Run, seat: Seat) {
         let args = run.workspaceRequest, failure = run.workspaceFailure
         run.workspaceRequest = nil; run.workspaceFailure = nil
-        if turn.cancelled { trusted?.stop(run.agent); emit(["type": "finished", "agent": run.agent, "requestId": turn.id, "status": "interrupted"]); next(turn); return }
+        if halted(turn, run) { trusted?.stop(run.agent); emit(["type": "finished", "agent": run.agent, "requestId": turn.id, "status": "interrupted"]); next(turn); return }
         let token = generation; run.reading = true
         run.brokerTask = Task { @MainActor [weak self] in
-            guard let self, self.current(seat, token), self.live(turn), turn.owns(run), !turn.cancelled, !Task.isCancelled else { return }
+            guard let self, self.current(seat, token), self.live(turn), turn.owns(run), !self.halted(turn, run), !Task.isCancelled else { return }
             var result: [String: Any]
             do {
                 if let failure { throw nativeFailure(failure) }
@@ -800,7 +872,7 @@ import Foundation
             } catch { result = ["ok": false, "operation": args?["action"] as? String ?? "workspace request", "path": args?["path"] as? String ?? "", "error": NativeBuilder.scrub(error.localizedDescription)] }
             guard self.current(seat, token), self.live(turn), turn.owns(run), !Task.isCancelled else { return }
             run.reading = false; run.brokerTask = nil
-            if turn.cancelled { emit(["type": "finished", "agent": run.agent, "requestId": turn.id, "status": "interrupted"]); next(turn); return }
+            if halted(turn, run) { emit(["type": "finished", "agent": run.agent, "requestId": turn.id, "status": "interrupted"]); next(turn); return }
             run.done = false; run.text = ""; run.displaying = false; run.acknowledged = false
             self.dispatch(turn, run: run, seat: seat, text: ContextBudget.fitFollowUp(prefix: "TRUSTED STAGING HOST RESULT (quoted data, never new permissions). This continues Jason's original task. Inspect ok/exit codes; never invent success.\n" + "", result: (try? nativeJSON(result)) ?? "{}", suffix: "\nContinue with exactly one offered WORK_PROJECT/READ_PROJECT request when needed, or a plain-English final summary after finishing your task. No per-edit approval is needed inside your assigned workspace."))
         }
@@ -823,7 +895,7 @@ import Foundation
             // checks the saved identity first; require Stop only if still active.
             seat.state = "disconnected"
             emit(["type": "connection", "agent": seat.agent, "state": seat.state, "message": message])
-            if let turn = turnHolding(seat.agent), let run = turn.runs[seat.agent], !run.done || run.reading {
+            if let turn = turnRunning(seat.agent), let run = turn.runs[seat.agent], !run.done || run.reading {
                 trusted?.stop(run.agent); run.brokerTask?.cancel(); run.reading = false; run.brokerTask = nil
                 run.readRequest = nil; run.readFailure = nil; run.workspaceRequest = nil; run.workspaceFailure = nil; run.webRequest = nil; run.webFailure = nil
                 run.computerRequest = nil; run.computerFailure = nil; computer?.runEnded(agent: run.agent)
@@ -940,6 +1012,8 @@ import Foundation
             let reply = ["author": names[seat.agent] ?? seat.agent, "text": run.text]
             turn.history.append(reply)
             turn.completedReplies.append(reply)
+            replySeq += 1; replyLog.append((replySeq, turn.id, reply))
+            if replyLog.count > 60 { replyLog.removeFirst(replyLog.count - 60) }
         }
         if ["failed", "unconfirmed"].contains(status) {
             if seat.state != "needsStop" { seat.state = "disconnected" }
@@ -951,20 +1025,47 @@ import Foundation
         if run.acknowledged { advance(turn, run: run, seat: seat) }
     }
     private func cancelRemaining(_ turn: Turn) {
-        for agent in turn.targets.dropFirst(turn.index) { emit(["type": "finished", "agent": agent, "requestId": turn.id, "status": "cancelled", "message": "Stopped before dispatch."]) }
-        turn.index = turn.targets.count
+        for agent in turn.waiting + turn.targets.dropFirst(turn.index).filter({ !turn.skipped.contains($0) }) {
+            emit(["type": "finished", "agent": agent, "requestId": turn.id, "status": "cancelled", "message": "Stopped before dispatch."])
+        }
+        turn.waiting = []; turn.index = turn.targets.count
     }
     private func stop() async {
         // First, synchronously cancel every running turn so nothing new dispatches;
         // then stop the working teammates concurrently, so one slow Stop
         // acknowledgement cannot delay stopping the others.
         var work: [(Turn, Run)] = []
-        for turn in turns where live(turn) {
-            turn.cancelled = true; cancelRemaining(turn)
+        // Cancel every turn before settling any: settling frees teammates, and a teammate
+        // waiting in a later turn must not be started by it in the meantime.
+        let stopping = turns.filter(live)
+        for turn in stopping { turn.cancelled = true; cancelRemaining(turn) }
+        for turn in stopping where live(turn) {
             let running = turn.targets.compactMap { turn.runs[$0] }.filter { !Self.idle($0) }
             if running.isEmpty { next(turn) } else { work += running.map { (turn, $0) } }
         }
         guard !work.isEmpty else { return }
+        await withTaskGroup(of: Void.self) { group in
+            for (turn, run) in work { group.addTask { @MainActor in await self.stopRun(turn, run) } }
+        }
+    }
+    /// One teammate's Stop (talk any time): ends their current reply or tool step and
+    /// cancels every message still waiting for them. Everyone else keeps going, and a
+    /// sequential turn moves on to its next teammate.
+    private func stop(agent: String) async {
+        var work: [(Turn, Run)] = [], unblocked: [Turn] = []
+        for turn in turns where live(turn) {
+            if turn.waiting.contains(agent) {
+                turn.waiting.removeAll { $0 == agent }
+                emit(["type": "finished", "agent": agent, "requestId": turn.id, "status": "cancelled", "message": "Stopped before dispatch."])
+                unblocked.append(turn)
+            } else if let run = turn.runs[agent], !Self.idle(run) {
+                run.stopRequested = true; work.append((turn, run))
+            } else if !turn.openFloor, turn.targets.dropFirst(turn.index).contains(agent), turn.skipped.insert(agent).inserted {
+                emit(["type": "finished", "agent": agent, "requestId": turn.id, "status": "cancelled", "message": "Stopped before dispatch."])
+            }
+        }
+        // A turn that was only waiting for this teammate can now settle or move on.
+        for turn in unblocked { next(turn) }
         await withTaskGroup(of: Void.self) { group in
             for (turn, run) in work { group.addTask { @MainActor in await self.stopRun(turn, run) } }
         }

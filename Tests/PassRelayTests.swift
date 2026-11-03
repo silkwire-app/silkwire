@@ -115,50 +115,40 @@ import AppKit
         check(store.conversation.messages.count - before == 4 && store.status.contains("Everyone passed"), "when everyone passes the round ends and Jason is told")
         allPass = false
 
-        // Send while working: the addition is queued, then delivered.
+        // Talk any time: Send while working sends at once (nothing queues), and the team
+        // answers it as each teammate frees up.
         store.conversation.draft = "First request."
         store.send()
         check(store.busy, "first request is in progress")
         store.conversation.draft = "FORGOT-THIS-SENTENCE-882"
-        check(store.canQueue, "the composer stays usable while the team works")
+        check(store.canSend, "the composer stays usable while the team works")
         store.send()
-        check(store.hasQueued && store.conversation.draft.isEmpty && store.queuedText == "FORGOT-THIS-SENTENCE-882", "Send while working queues the addition and clears the composer")
-        try await wait("queued delivery") { !store.busy && !store.hasQueued && store.conversation.messages.contains { $0.author == "Jason" && $0.text == "FORGOT-THIS-SENTENCE-882" && $0.state == "sent" } }
-        check(transports["eve"]?.prompts.last?.contains("FORGOT-THIS-SENTENCE-882") == true, "the addition reaches the team right after the current reply")
+        check(!store.hasQueued && store.conversation.draft.isEmpty && store.conversation.messages.contains { $0.author == "Jason" && $0.text == "FORGOT-THIS-SENTENCE-882" }, "Send while working sends at once: into the transcript, composer cleared, nothing queued")
+        try await wait("mid-round delivery") { !store.busy && store.conversation.messages.contains { $0.author == "Jason" && $0.text == "FORGOT-THIS-SENTENCE-882" && $0.state == "sent" } }
+        check(transports["eve"]?.prompts.last?.contains("FORGOT-THIS-SENTENCE-882") == true, "the addition reaches the team")
+        check(transports.values.allSatisfy { $0.prompts.filter { $0.contains("FORGOT-THIS-SENTENCE-882") }.count <= 1 }, "each teammate receives the addition at most once")
 
-        // A waiting addition is saved to disk; after a restart it returns to the composer.
-        store.conversation.draft = "Durability request."
-        store.send()
-        store.conversation.draft = "SAVED-ADDITION-209"
-        store.send()
-        check(store.hasQueued, "addition queued for the durability check")
-        // Queue persistence is asynchronous so Send never joins the disk queue on
-        // the UI actor. Observe its actual automatic write before simulating a crash.
-        try await wait("queued addition reaches disk") {
-            guard let bytes = try? Data(contentsOf: library.appendingPathComponent("workspace.json")),
-                  let snapshot = try? JSONDecoder().decode(ConversationWorkspace.self, from: bytes) else { return false }
-            return snapshot.conversations.first { $0.id == store.conversation.id }?.queuedText == "SAVED-ADDITION-209"
-        }
-        let saved = try JSONDecoder().decode(ConversationWorkspace.self, from: Data(contentsOf: library.appendingPathComponent("workspace.json")))
-        check(saved.conversations.first { $0.id == store.conversation.id }?.queuedText == "SAVED-ADDITION-209", "the waiting addition is written to disk, not just kept in memory")
+        // A waiting addition saved by an earlier build comes back to the composer after a
+        // restart: never lost, never sent automatically.
         let restarted = root.appendingPathComponent("restarted")
         try FileManager.default.createDirectory(at: restarted, withIntermediateDirectories: true)
-        try FileManager.default.copyItem(at: library.appendingPathComponent("workspace.json"), to: restarted.appendingPathComponent("workspace.json"))
+        var legacy = store.conversation; legacy.queuedText = "SAVED-ADDITION-209"; legacy.draft = ""
+        try JSONEncoder().encode(ConversationWorkspace(activeID: legacy.id, conversations: [legacy], projects: [project])).write(to: restarted.appendingPathComponent("workspace.json"))
         let reopened = ConversationStore(directory: restarted, transportFactory: { _, _ in RelayProbeTransport(reply: { "ok" }) }, workspaceSandbox: stage)
         defer { reopened.disconnect() }
         await reopened.start()
-        check(!reopened.hasQueued && reopened.conversation.draft.contains("SAVED-ADDITION-209"), "after a restart the unsent addition is back in the composer, not lost and not sent automatically")
-        try await wait("durability round settles") { !store.busy && !store.hasQueued }
+        check(!reopened.hasQueued && reopened.conversation.draft.contains("SAVED-ADDITION-209"), "after a restart a legacy waiting addition is back in the composer, not lost and not sent automatically")
 
-        // Stop puts a waiting addition back in the composer instead of losing it.
+        // Stop with two messages live: neither unsent one is lost, and none is dispatched.
         store.conversation.draft = "Another request."
         store.send()
         store.conversation.draft = "KEEP-ME-551"
         store.send()
-        check(store.hasQueued, "second addition queued")
+        check(store.busy && !store.hasQueued, "two messages are live at once")
         store.stop()
-        check(!store.hasQueued && store.conversation.draft.contains("KEEP-ME-551"), "Stop returns the waiting addition to the composer")
         try await wait("stop settles") { !store.busy }
+        check(store.conversation.draft.contains("KEEP-ME-551") && store.conversation.draft.contains("Another request."), "Stop before dispatch returns both unsent messages to the composer")
+        check(!transports.values.contains { $0.prompts.contains { $0.contains("KEEP-ME-551") } }, "a message stopped before dispatch is never sent")
 
         print("PassRelayTests: \(checks) checks, \(failures) failures")
         if failures > 0 { exit(1) }

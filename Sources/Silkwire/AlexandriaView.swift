@@ -427,7 +427,7 @@ struct AlexandriaPanel: View {
         Label(Alexandria.notPrivate, systemImage: "person.3")
             .font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             .padding(10).frame(maxWidth: .infinity, alignment: .leading)
-            .background(SilkwireTheme.wash(0.035), in: RoundedRectangle(cornerRadius: 8))
+            .background(SilkwireTheme.tile(0.035), in: RoundedRectangle(cornerRadius: 8))
     }
 
     private var homeView: some View {
@@ -547,7 +547,7 @@ struct AlexandriaPanel: View {
                         Spacer()
                         Button("Remove from Alexandria…") { removingVault = vault }.buttonStyle(.borderless).font(.system(size: 11))
                             .disabled(store.storageError != nil).help("Removes this vault's imported pages from this Project. Your Obsidian vault is not touched.")
-                    }.padding(8).background(SilkwireTheme.wash(0.035), in: RoundedRectangle(cornerRadius: 8))
+                    }.padding(8).background(SilkwireTheme.tile(0.035), in: RoundedRectangle(cornerRadius: 8))
                 }
                 if let vaultNotice { Text(vaultNotice).font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true) }
             }
@@ -577,7 +577,7 @@ struct AlexandriaPanel: View {
             }
         }
         .padding(12).frame(maxWidth: .infinity, alignment: .leading)
-        .background(SilkwireTheme.wash(0.03), in: RoundedRectangle(cornerRadius: 8))
+        .background(SilkwireTheme.tile(0.03), in: RoundedRectangle(cornerRadius: 8))
     }
 
     /// Compact contents for narrow windows: the same shelf or vault, as a menu.
@@ -650,7 +650,7 @@ struct AlexandriaPanel: View {
                             Text("Matches for “\(query)” are highlighted.")
                             Spacer()
                             Button("Show formatted") { state.highlight = "" }.buttonStyle(.borderless)
-                        }.font(.system(size: 11)).foregroundStyle(.secondary).padding(8).background(SilkwireTheme.wash(0.04), in: RoundedRectangle(cornerRadius: 7))
+                        }.font(.system(size: 11)).foregroundStyle(.secondary).padding(8).background(SilkwireTheme.tile(0.04), in: RoundedRectangle(cornerRadius: 7))
                         HighlightedLines(text: page.body, query: query)
                     } else if page.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                         Text("This page is empty.").foregroundStyle(.tertiary)
@@ -687,7 +687,7 @@ struct AlexandriaPanel: View {
             if let notice = state.notice { Text(notice).font(.caption).foregroundStyle(.orange) }
             TextEditor(text: draft.body)
                 .font(.system(size: 13, design: .monospaced)).scrollContentBackground(.hidden)
-                .padding(6).background(SilkwireTheme.wash(0.03), in: RoundedRectangle(cornerRadius: 8))
+                .padding(6).background(SilkwireTheme.tile(0.03), in: RoundedRectangle(cornerRadius: 8))
                 .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(SilkwireTheme.line))
                 .frame(minHeight: 220, maxHeight: .infinity)
             Text("Markdown welcome. Each save keeps the previous version in History (the latest 50). " + Alexandria.notMemory).font(.system(size: 10.5)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)

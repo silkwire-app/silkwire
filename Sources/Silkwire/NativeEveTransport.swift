@@ -128,7 +128,8 @@ extension URLSessionWebSocketTask: NativeGatewaySocket {}
                 }
             } catch {
                 guard let self, self.generation == current, !self.closed else { return }
-                self.lostConnection()
+                let code = (ws as? URLSessionWebSocketTask)?.closeCode.rawValue ?? 0
+                self.lostConnection(.socketClosed, detail: "close code \(code), error \((error as NSError).domain) \((error as NSError).code)")
             }
         }
         let challengeTimeout = Task { [weak self] in
@@ -163,7 +164,8 @@ extension URLSessionWebSocketTask: NativeGatewaySocket {}
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
                 guard !Task.isCancelled, let self, self.generation == current, !self.closed else { return }
                 if self.liveness.isDead(at: ProcessInfo.processInfo.systemUptime, tickSeconds: self.tickSeconds) {
-                    self.lostConnection(); return
+                    let quiet = Int(ProcessInfo.processInfo.systemUptime - self.liveness.lastFrame)
+                    self.lostConnection(.heartbeat, detail: "no frame for \(quiet)s (tick \(Int(self.tickSeconds))s)"); return
                 }
             }
         }
@@ -200,7 +202,7 @@ extension URLSessionWebSocketTask: NativeGatewaySocket {}
                 // A lost baseline cannot be repaired by appending later deltas.
                 // Keep terminal evidence, then retire and reconcile from exact history.
                 if event == "chat", let payload = frame["payload"] as? [String: Any], ["final", "aborted", "error"].contains(payload["state"] as? String ?? "") { consumeChat(payload) }
-                lostConnection(); return
+                lostConnection(.sequenceGap, detail: "expected \(old + 1), got \(next) (\(event))"); return
             }
             sequence = next
         }
@@ -255,6 +257,7 @@ extension URLSessionWebSocketTask: NativeGatewaySocket {}
         deadlineTask = Task { [weak self, weak current] in
             try? await Task.sleep(nanoseconds: 180_000_000_000)
             guard !Task.isCancelled, let self, let current, self.run === current else { return }
+            EveConnectionLog.record(.replyDeadline, detail: "no outcome after 180s", busy: true)
             self.eventHandler?(.disconnected(message: "Eve reply has no confirmed outcome. Reconnect to check it; nothing was resent.", uncertain: true))
             self.close()
         }
@@ -389,24 +392,40 @@ extension URLSessionWebSocketTask: NativeGatewaySocket {}
     }
     func stopPrevious() async throws { try await stop() }
     private func needsStop(_ message: String) -> NSError { NSError(domain: "Silkwire", code: 2, userInfo: [NSLocalizedDescriptionKey: message, "needsStop": true]) }
-    private func lostConnection() {
+    private func lostConnection(_ reason: EveConnectionLog.Reason, detail: String) {
         guard !closed else { return }
+        EveConnectionLog.record(reason, detail: detail, busy: run != nil)
         retireSocket()
+        guard reconnectTask == nil else { return }
         if run != nil {
             eventHandler?(.activity("Reconnecting to Eve; checking the original reply…"))
-            guard reconnectTask == nil else { return }
             reconnectTask = Task { [weak self] in
                 defer { self?.reconnectTask = nil }
                 for delay in [1, 2, 4, 8, 15, 30] {
                     try? await Task.sleep(nanoseconds: UInt64(delay) * 1_000_000_000)
                     guard !Task.isCancelled, let self, !self.closed, self.run != nil else { return }
-                    do { try await self.openSocket(); try await self.reconcile(); return } catch {}
+                    do { try await self.openSocket(); try await self.reconcile(); EveConnectionLog.record(.reconnected, detail: "after \(delay)s, reply reconciled", busy: true); return } catch {}
                 }
                 guard let self, !self.closed, self.run != nil else { return }
+                EveConnectionLog.record(.gaveUp, detail: "reconnect failed during a reply", busy: true)
                 self.eventHandler?(.disconnected(message: "Eve disconnected. Reconnect to check the original reply; nothing was resent.", uncertain: true))
                 self.close()
             }
-        } else { eventHandler?(.disconnected(message: "Eve disconnected. Reconnect when ready.", uncertain: false)) }
+        } else {
+            // Idle: nothing is in flight, so quietly reopen the same session. Nothing is ever
+            // resent; if every attempt fails, Jason sees the usual Reconnect prompt.
+            reconnectTask = Task { [weak self] in
+                defer { self?.reconnectTask = nil }
+                for delay in [1, 2, 4, 8, 15, 30, 60] {
+                    try? await Task.sleep(nanoseconds: UInt64(delay) * 1_000_000_000)
+                    guard !Task.isCancelled, let self, !self.closed, self.run == nil else { return }
+                    do { try await self.openSocket(); EveConnectionLog.record(.reconnected, detail: "idle, after \(delay)s", busy: false); return } catch {}
+                }
+                guard let self, !self.closed, self.run == nil else { return }
+                EveConnectionLog.record(.gaveUp, detail: "idle reconnect failed", busy: false)
+                self.eventHandler?(.disconnected(message: "Eve disconnected and couldn't reconnect on her own. Reconnect when ready.", uncertain: false))
+            }
+        }
     }
     private func retireSocket() {
         ready = false; generation = UUID()
@@ -430,5 +449,22 @@ extension URLSessionWebSocketTask: NativeGatewaySocket {}
                          model: "Inherited from OpenClaw", effort: "Managed by OpenClaw", speed: "Managed by OpenClaw",
                          permissions: "Conversation instruction + Project reader; existing OpenClaw permissions unchanged",
                          usage: [], models: [], note: "Native v4 WebSocket connection; existing Gateway permissions are unchanged. Usage is not reported here.")
+    }
+}
+
+
+/// Why Eve's connection dropped, kept in this app's own library (Diagnostics/eve-connection.log)
+/// so the real cause can be found. Contains only timings, reasons and codes, never messages
+/// or credentials. Kept small: the oldest half is dropped past 200 KB.
+enum EveConnectionLog {
+    enum Reason: String { case socketClosed = "socket-closed", heartbeat, sequenceGap = "sequence-gap", replyDeadline = "reply-deadline", reconnected, gaveUp = "gave-up" }
+    static var folderOverride: URL?
+    static var url: URL { (folderOverride ?? WorkspaceEnvironment.current.library.appendingPathComponent("Diagnostics", isDirectory: true)).appendingPathComponent("eve-connection.log") }
+    static func line(_ reason: Reason, detail: String, busy: Bool, at date: Date = Date()) -> String {
+        let clean = String(detail.replacingOccurrences(of: "\n", with: " ").prefix(200))
+        return "\(ISO8601DateFormatter().string(from: date)) \(reason.rawValue) \(busy ? "busy" : "idle") \(clean)\n"
+    }
+    static func record(_ reason: Reason, detail: String, busy: Bool) {
+        ConnectionLog.record(agent: "eve", event: reason.rawValue, detail: "\(busy ? "busy" : "idle") \(detail)")
     }
 }

@@ -45,7 +45,8 @@ enum SilkwireTheme {
     static let card = adaptive { $0.card }
     static let ink = adaptive { $0.ink }
     static let inkSoft = adaptive { $0.secondaryInk }
-    static let line = adaptive({ $0.ink }, alpha: { $0.lineOpacity })
+    /// Hairlines: ink at low opacity on Parchment, the style guide's #29292f on Midnight.
+    static let line = adaptive({ $0.isLight ? $0.ink : $0.border }, alpha: { $0.isLight ? $0.lineOpacity : 1 })
     static func well(_ opacity: Double) -> Color { adaptive({ $0.well }, alpha: { opacity * $0.wellStrength }) }
     static func shade(_ white: Double) -> Color { adaptive { $0.shade(white) } }
     static let jasonBubble = adaptive { $0.jasonBubble }
@@ -67,7 +68,26 @@ enum SilkwireTheme {
     /// Fields, code and quotes: near-white on Parchment, a dark inset on Midnight.
     static let field = adaptive({ $0.isLight ? $0.paperWhite : $0.well }, alpha: { $0.isLight ? 1 : 0.3 })
     /// Parchment cards, columns and fields get a hairline edge; Midnight relies on fill steps.
-    static let cardEdge = adaptive({ $0.ink }, alpha: { $0.isLight ? $0.lineOpacity : 0 })
+    /// Midnight cards now carry the style guide's #29292f edge too (Nov 2).
+    static let cardEdge = adaptive({ $0.isLight ? $0.ink : $0.border }, alpha: { $0.isLight ? $0.lineOpacity : 1 })
+    /// An edge drawn on Midnight only (Parchment panels stay borderless where they were).
+    static let midnightEdge = adaptive({ $0.border }, alpha: { $0.isLight ? 0 : 1 })
+    /// The sidebar's open-project panel: a faint wash on Parchment, #151519 on Midnight.
+    static let panel = adaptive({ $0.isLight ? $0.ink : $0.card }, alpha: { $0.isLight ? 0.018 * $0.washStrength : 1 })
+    /// The selected conversation row: accent tint on Parchment, #212127 on Midnight.
+    static let selectedRow = adaptive({ $0.isLight ? $0.accent : $0.selectedRow }, alpha: { $0.isLight ? 0.10 : 1 })
+    /// Rows and cards inside Alexandria and Future: the same fill as chat bubbles on Midnight,
+    /// the existing faint wash at the given strength on Parchment.
+    static func tile(_ opacity: Double) -> Color { adaptive({ $0.isLight ? $0.ink : $0.agentBubble }, alpha: { $0.isLight ? opacity * $0.washStrength : 1 }) }
+    /// A teammate's chip background (solid on Midnight, a tint of their color on Parchment).
+    static func chipFill(_ name: String) -> Color { adaptive({ $0.chipFill(name) ?? $0.identity(name) }, alpha: { $0.chipFill(name) == nil ? 0.16 : 1 }) }
+    /// A teammate's chip border: their full color on Midnight, a soft one on Parchment.
+    /// Future's North Stars box: accent-tinted on Parchment, the shared card look on Midnight.
+    static let northStarsFill = adaptive({ $0.isLight ? $0.accent : $0.agentBubble }, alpha: { $0.isLight ? 0.07 : 1 })
+    static let northStarsEdge = adaptive({ $0.isLight ? $0.accent : $0.border }, alpha: { $0.isLight ? 0.25 : 1 })
+    /// Every open room's column: the chat surface (#151519) on Midnight, the existing inset on Parchment.
+    static let columnFill = adaptive({ $0.isLight ? $0.well : $0.surface }, alpha: { $0.isLight ? 0.06 * $0.wellStrength : 1 })
+    static func chipStroke(_ name: String) -> Color { adaptive({ $0.identity(name) }, alpha: { $0.isLight ? 0.4 : 0.9 }) }
     static let windowNSColor = ThemePalette.adaptive { $0.window }
     static let inkNSColor = ThemePalette.adaptive { $0.ink }
     // A faint panel tint: white on Midnight, ink on Parchment.
@@ -107,8 +127,8 @@ struct InitialCircle: View {
         Text(String(name.prefix(1))).font(.system(size: size * 0.47, weight: .semibold))
             .foregroundStyle(SilkwireTheme.identity(name))
             .frame(width: size, height: size)
-            .background(SilkwireTheme.identity(name).opacity(0.16), in: Circle())
-            .overlay(Circle().strokeBorder(SilkwireTheme.identity(name).opacity(0.4), lineWidth: 0.7))
+            .background(SilkwireTheme.chipFill(name), in: Circle())
+            .overlay(Circle().strokeBorder(SilkwireTheme.chipStroke(name), lineWidth: 0.7))
             .accessibilityHidden(true)
     }
 }
@@ -220,12 +240,24 @@ enum TranscriptFlow {
         return (shown, waiting)
     }
     /// Puts replies in the order they started speaking, without moving anything else
-    /// (Jason's own messages keep their places).
-    static func speakingOrder<T>(_ items: [T], id: (T) -> UUID, seq: [UUID: Int]) -> [T] {
+    /// (Jason's own messages keep their places). With `group` (a reply's request), replies
+    /// only trade places with replies to the same message: talk any time can have two of
+    /// Jason's messages live at once, and an answer must never move above the message it
+    /// answers.
+    static func speakingOrder<T>(_ items: [T], id: (T) -> UUID, seq: [UUID: Int], group: ((T) -> String?)? = nil) -> [T] {
         let slots = items.indices.filter { seq[id(items[$0])] != nil }
-        let sorted = slots.map { items[$0] }.sorted { seq[id($0)]! < seq[id($1)]! }
         var out = items
-        for (slot, item) in zip(slots, sorted) { out[slot] = item }
+        var buckets: [String: [Int]] = [:], keys: [String] = []
+        for slot in slots {
+            let key = group?(items[slot]) ?? ""
+            if buckets[key] == nil { keys.append(key) }
+            buckets[key, default: []].append(slot)
+        }
+        for key in keys {
+            let positions = buckets[key]!
+            let sorted = positions.map { items[$0] }.sorted { seq[id($0)]! < seq[id($1)]! }
+            for (slot, item) in zip(positions, sorted) { out[slot] = item }
+        }
         return out
     }
     /// Visible ids that are new since the baseline and have no place yet, in saved order.

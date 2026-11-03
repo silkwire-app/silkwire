@@ -17,7 +17,7 @@ import SwiftUI
         check(abs(ThemeRGB.contrast(white, white) - 1) < 0.0001, "same color is 1:1")
 
         let paper = ThemePalette.parchment
-        let names = ["Jason", "Eve", "Claude", "Codex"]
+        let names = ["Jason", "Eve", "Claude", "Codex", "Grok"]
         check(paper.isLight, "Parchment is a light theme")
         check(Set(paper.identities.keys) == Set(names), "Parchment tunes every teammate color")
         for background in [("parchment", paper.surface), ("card", paper.card), ("your message", paper.jasonBubble)] {
@@ -74,10 +74,16 @@ import SwiftUI
         check(!night.isLight, "Midnight stays dark")
         check(night.accent == ThemeRGB(red: 0.70, green: 0.57, blue: 0.99), "Midnight accent is the classic purple")
         check(night.surface.relativeLuminance < 0.01 && night.surface.blue > night.surface.green, "Midnight surface stays deep ink-charcoal")
-        check(night.sidebar.blue - night.sidebar.red > night.surface.blue - night.surface.red, "Midnight sidebar is a cooler blue-black than the page")
+        // Midnight style guide (Jason, Nov 2, from Claude.app's mockup): exact values.
+        check(night.sidebar == ThemeRGB(hex: 0x0d0d10) && night.window == ThemeRGB(hex: 0x0d0d10), "style guide: Midnight frame and sidebar are #0d0d10")
+        check(night.surface == ThemeRGB(hex: 0x151519) && night.card == ThemeRGB(hex: 0x151519), "style guide: Midnight chat and panels are #151519")
+        check(night.agentBubble == ThemeRGB(hex: 0x1c1c21) && night.jasonBubble == ThemeRGB(hex: 0x1c1c21), "style guide: Midnight bubbles are #1c1c21")
+        check(night.border == ThemeRGB(hex: 0x29292f) && night.selectedRow == ThemeRGB(hex: 0x212127), "style guide: Midnight borders #29292f, selected row #212127")
+        check(night.chipFill("Eve") == ThemeRGB(hex: 0x292541) && night.chipFill("Claude") == ThemeRGB(hex: 0x362b21) && night.chipFill("Codex") == ThemeRGB(hex: 0x203330) && night.chipFill("Grok") == ThemeRGB(hex: 0x1f2942), "style guide: Midnight chip backgrounds")
+        check(paper.chipFill("Eve") == nil, "Parchment chips keep their tint")
+        for name in ["Eve", "Claude", "Codex", "Grok"] { check(ThemeRGB.contrast(night.identity(name), night.chipFill(name)!) >= 4.5, "\(name)'s initial is readable on its Midnight chip") }
         check(night.window.relativeLuminance < night.surface.relativeLuminance, "Midnight window sits just behind the page")
-        check(night.card.relativeLuminance > night.surface.relativeLuminance && night.card.blue > night.card.green, "Midnight cards lift off the page with a hint of plum")
-        check(night.reading.relativeLuminance > night.surface.relativeLuminance, "Alexandria reads on a slightly lighter neutral charcoal in Midnight")
+        check(night.reading == night.surface, "style guide: Alexandria reads on the same #151519 as chat in Midnight")
         // Trace's 802c249 review: green pill text must clear 4.5:1 on its 14% tint over cards and the page.
         func tinted(_ c: ThemeRGB, over bg: ThemeRGB) -> ThemeRGB { ThemeRGB(red: c.red * 0.14 + bg.red * 0.86, green: c.green * 0.14 + bg.green * 0.86, blue: c.blue * 0.14 + bg.blue * 0.86) }
         for (name, bg) in [("card", paper.agentBubble), ("page", paper.canvas), ("your card", paper.jasonBubble)] {
@@ -96,12 +102,11 @@ import SwiftUI
         check(night.ink == white && night.lineOpacity == 0.075 && night.washStrength == 1, "Midnight tints are the classic white tints")
         check(night.well == black && night.wellStrength == 1, "Midnight composer and code shading keep their exact black tints")
         check(night.shade(0.73) == ThemeRGB(red: 0.73, green: 0.73, blue: 0.73) && night.shade(0.66) == ThemeRGB(red: 0.66, green: 0.66, blue: 0.66), "Midnight wordmark and spider greys are the classic solid greys")
-        check(night.sidebarFloor.relativeLuminance < night.sidebar.relativeLuminance, "Midnight sidebar still darkens gently toward the bottom")
-        check(night.sidebarFloor.relativeLuminance > night.surface.relativeLuminance, "Midnight sidebar is a lighter gray than the chat, top to bottom")
-        check(abs(night.reading.red - night.reading.blue) < 0.01, "Midnight reading surface is a plain neutral charcoal")
+        check(night.sidebarFloor == night.sidebar && night.sidebar.relativeLuminance < night.surface.relativeLuminance, "style guide: the Midnight sidebar is one flat near-black, darker than chat")
         check(ThemeRGB.contrast(paper.shade(0.73), paper.surface) >= 4.5, "Parchment wordmark stays readable at its lightest point")
         check(night.jasonBubble.relativeLuminance > night.surface.relativeLuminance, "your Midnight messages sit on a lighter violet-charcoal bubble")
-        check(night.identity("Claude") == ThemeRGB(red: 0.96, green: 0.72, blue: 0.51), "Midnight Claude color is unchanged")
+        check(night.identity("Claude") == ThemeRGB(hex: 0xe4a97a) && night.identity("Eve") == ThemeRGB(hex: 0xb5a8f9) && night.identity("Grok") == ThemeRGB(hex: 0x93aef9), "style guide: Midnight teammate letters")
+        check(night.identity("Codex") == ThemeRGB(red: 0.43, green: 0.84, blue: 0.78), "Codex keeps its teal (Jason, Nov 2)")
         for name in names {
             check(ThemeRGB.contrast(night.identity(name), night.surface) >= 4.5, "\(name) is readable in Midnight")
         }

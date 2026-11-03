@@ -45,8 +45,23 @@ struct HostNativeBuildPlan {
         await engine.start(source: approved.source, task: context.item.title, build: approved.build, test: approved.test, edit: approved.edit)
         guard let receipt = receipts[id], receipt["physicalExitUnconfirmed"] as? Bool != true else { throw HostExecutionCoordinator.Failure.physicalExitUnconfirmed }
         guard context.mayPerformOperation() else { throw CancellationError() }
-        guard receipt["status"] as? String == "review" else { throw BackgroundWorkError.reconciliationRequired }
+        guard receipt["status"] as? String == "review" else {
+            throw BackgroundWorkReportedFailure(note: Self.failureNote(receipt))
+        }
         return .completed(checkpoint: "Native Builder receipt " + (receipt["id"] as? String ?? ""), summary: receipt["message"] as? String ?? "Private build finished; review its durable receipt.")
+    }
+    /// The first meaningful line of a failed Builder receipt, in plain words. Tool noise
+    /// (xcodebuild/DVT chatter) is skipped so the real reason is what people see.
+    static func failureNote(_ receipt: [String: Any]) -> String {
+        let status = receipt["status"] as? String ?? "unknown"
+        // Tool chatter often shares a line with the real reason; cut it out, then filter.
+        let message = (receipt["message"] as? String ?? "").replacingOccurrences(of: #"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+ xcodebuild\[[^\]]*\][^\n]*"#, with: "", options: .regularExpression)
+        let noise = ["xcodebuild[", "DVTFilePathFSEvents", "DVTDeveloperPaths", "[MT]"]
+        let lines = message.split(whereSeparator: { $0.isNewline }).map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { line in !line.isEmpty && !noise.contains { line.contains($0) } }
+        let reason = lines.prefix(2).joined(separator: " ")
+        let lead = status == "failed" ? "Didn't finish" : "Stopped (\(status))"
+        return limitedUTF16(reason.isEmpty ? lead + "; no reason was recorded." : lead + ": " + reason, to: 600)
     }
     func cancel(_ id: UUID) { engines[id]?.stop() }
     func join(_ context: BackgroundWorkContext) async -> HostPhysicalExit {

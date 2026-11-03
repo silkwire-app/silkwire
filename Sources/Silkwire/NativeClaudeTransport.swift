@@ -98,6 +98,7 @@ import Foundation
     private func exited(_ run: Run, code: Int32) {
         guard active === run, !run.settled else { return }
         if run.stopping { finish(run, status: "interrupted"); return }
+        if code != 0 { ConnectionLog.record(agent: "claude", event: "process-exit", detail: "Claude process exited with code \(code)") }
         guard !closed, run.boundaryVerified, run.output.allSatisfy({ [9, 10, 13, 32].contains($0) }), code == 0,
               let result = run.result, result["is_error"] as? Bool != true, result["subtype"] as? String == "success", let text = result["result"] as? String, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, text.utf16.count <= 40_000 else { finish(run, status: "failed", message: "Claude ended without a confirmed reply. Nothing resent."); return }
         eventHandler?(.replace(text)); finish(run, status: "completed")

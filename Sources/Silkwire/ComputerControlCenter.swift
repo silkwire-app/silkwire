@@ -486,6 +486,10 @@ struct ComputerApproval: Identifiable, Equatable {
     func stopTasks(conversationID: String) {
         for task in tasks where task.conversationID == conversationID && task.active { stopTask(task.id, notify: false) }
     }
+    /// One teammate's Stop: only that teammate's tasks in this conversation end.
+    func stopTasks(conversationID: String, agent: String) {
+        for task in tasks where task.conversationID == conversationID && task.agent == agent && task.active { stopTask(task.id, notify: false) }
+    }
     private func taskAction(_ request: ComputerRequest, agent: String, conversationID: String, entry: ComputerAuditEntry) -> ComputerOutcome {
         var entry = entry
         let existing = activeTask(agent, conversationID)

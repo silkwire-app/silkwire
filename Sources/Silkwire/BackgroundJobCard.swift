@@ -133,6 +133,17 @@ enum BackgroundJobText {
         let text = summary.trimmingCharacters(in: .whitespacesAndNewlines)
         return "**\(who) · \(card.title) · Completed**" + (text.isEmpty ? "" : "\n\n" + limitedUTF16(text, to: 8000))
     }
+    /// True only for a host-reported build failure (see failureNote). A stop the person
+    /// asked for, or an exit the host couldn't prove, stays quiet: those keep their card.
+    static func isReportedFailure(_ note: String) -> Bool {
+        note.hasPrefix("Didn't finish") || note.hasPrefix("Stopped (")
+    }
+    /// The room line for a job that ended without success.
+    static func ended(_ card: BackgroundJobCard, note: String) -> String {
+        let who = names[card.agent] ?? card.agent
+        let reason = note.trimmingCharacters(in: .whitespacesAndNewlines)
+        return "**\(who) · \(card.title) · Didn't finish**\n\n" + (reason.isEmpty ? "No reason was recorded. Open the job card for details." : limitedUTF16(reason, to: 1000))
+    }
     /// Quoted host evidence for the owner's optional explanation turn.
     static func followUp(_ items: [(card: BackgroundJobCard, receipt: String)]) -> String {
         let lines = items.map { "- \(names[$0.card.agent] ?? $0.card.agent): " + $0.receipt.replacingOccurrences(of: "\n", with: " ") }

@@ -54,6 +54,7 @@ struct ConnectionsView: View {
                     }.buttonStyle(.plain)
                 }
             }
+            ConnectionHistoryCard(agent: selected == "all" ? nil : selected)
             if selected == "all" { allConnectionsCard } else {
             connectionCard
             if setup.agent == selected || !setup.message.isEmpty {

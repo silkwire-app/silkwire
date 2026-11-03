@@ -175,6 +175,7 @@ import Foundation
                 let wasEnded = self.card(latest.jobID, in: latest.originatingConversationID)?.isEnded == true
                 self.apply(latest, in: latest.originatingConversationID)
                 if latest.state == .completed { self.deliverResults(host) }
+                if [.failed, .needsReview].contains(latest.state), !wasEnded, BackgroundJobText.isReportedFailure(latest.note) { self.announceEnding(latest) }
                 if [.completed, .failed, .needsReview].contains(latest.state), !wasEnded {
                     await self.refreshHolds(host, conversationID: latest.originatingConversationID)
                     // The slot may have changed hands: refresh every conversation's queued cards.
@@ -199,6 +200,22 @@ import Foundation
             if snapshot.resultAcknowledged { card.resultAcknowledged = true }
         }
         store?.saveSoon()
+    }
+    /// A job that ends without success gets one plain line in its room, and its owner a
+    /// short turn to explain, instead of only a quiet card. Keyed by job, so a repeated or
+    /// replayed event never posts twice. Only live transitions announce: old jobs that
+    /// ended before this launch keep their cards and don't flood the room.
+    private func announceEnding(_ snapshot: HostJobSnapshot) {
+        guard let store, let card = card(snapshot.jobID, in: snapshot.originatingConversationID),
+              let room = store.savedConversation(snapshot.originatingConversationID) else { return }
+        let key = "ended-" + snapshot.jobID.uuidString.lowercased()
+        guard !room.messages.contains(where: { $0.author == BackgroundJobText.resultAuthor && $0.requestId == key }) else { return }
+        let text = BackgroundJobText.ended(card, note: snapshot.note)
+        var notice = Message(author: BackgroundJobText.resultAuthor, text: text, state: "completed", requestId: key, detail: "Background job ended · host evidence")
+        notice.unread = true
+        store.updateConversation(room.id) { room in room.messages.append(notice); room.updatedAt = Date() }
+        store.saveSoon()
+        store.backgroundJobFinished(card, receipt: text, conversationID: room.id)
     }
     /// Inserts each pending result once (keyed by resultID), saves, THEN acknowledges.
     private func deliverResults(_ host: any BackgroundJobHost) {
