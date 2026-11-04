@@ -59,8 +59,10 @@ import Foundation
         check(app.contains("Start new replies at my message"), "the setting appears in conversation options")
         // Send flow (Nov 2): composer empties first, prompt arrives pre-collapsed.
         let storeSource = (try? String(contentsOfFile: "Sources/Silkwire/ConversationStore.swift", encoding: .utf8)) ?? ""
-        check(storeSource.contains("if fromDraft { sentAttachments = conversation.draftAttachments; conversation.draft = \"\"; conversation.draftAttachments = [] }"), "Send empties the composer before anything else happens")
-        check(storeSource.components(separatedBy: "restoreUnsentDraft()").count >= 4, "a prompt that can't be saved or is rejected returns to the composer")
+        // Talk any time: the attachments it took are kept on its own outgoing record (restored if unsent).
+        check(storeSource.contains("if fromDraft { conversation.draft = \"\"; conversation.draftAttachments = [] }") && storeSource.contains("attachments: fromDraft ? conversation.draftAttachments : []"), "Send empties the composer before anything else happens")
+        // Talk any time: each unsent message restores its own draft (save failure, rejection, room loss).
+        check(storeSource.components(separatedBy: "restoreUnsentDraft(request)").count >= 4, "a prompt that can't be saved or is rejected returns to the composer")
         check(app.contains("message.author == \"Jason\", [\"sending\", \"sent\"].contains(message.state), !expanded { jasonLine }"), "your prompt appears already collapsed")
         check(!app.contains("noteReveals") && !app.contains("stopAtPromptIfFull"), "no old reveal or stopper machinery competes with the glide")
         check(app.contains("if store.preferences.autoScrollReplies && messageSearch.isEmpty { followBottom(proxy) }"), "Send takes you to the live end")

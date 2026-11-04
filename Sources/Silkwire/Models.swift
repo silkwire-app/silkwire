@@ -274,7 +274,9 @@ struct WorkspacePreferences: Codable, Equatable {
     var startRepliesAtPrompt = true
     /// Real conversation (open floor): everyone in a room replies at once. Off by default.
     var openFloor = false
-    enum CodingKeys: String, CodingKey { case completionChime, sidebarVisible, reduceMotion, autoScrollReplies, textCompletion, automaticCorrection, startRepliesAtPrompt, openFloor }
+    /// After an open-floor round, teammates may respond to each other once (OpenFloor chime-in).
+    var chimeIn = true
+    enum CodingKeys: String, CodingKey { case completionChime, sidebarVisible, reduceMotion, autoScrollReplies, textCompletion, automaticCorrection, startRepliesAtPrompt, openFloor, chimeIn }
     init() {}
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -286,6 +288,7 @@ struct WorkspacePreferences: Codable, Equatable {
         automaticCorrection = try c.decodeIfPresent(Bool.self, forKey: .automaticCorrection) ?? false
         startRepliesAtPrompt = try c.decodeIfPresent(Bool.self, forKey: .startRepliesAtPrompt) ?? true
         openFloor = try c.decodeIfPresent(Bool.self, forKey: .openFloor) ?? false
+        chimeIn = try c.decodeIfPresent(Bool.self, forKey: .chimeIn) ?? true
     }
 }
 struct ConversationWorkspace: Codable {

@@ -1,56 +1,109 @@
-# Silkwire 🕷️
+<h1 align="center">Silkwire</h1>
 
-**You and your agents. Connected.**
+<p align="center">
+  <strong>You and your agents. Connected.</strong><br>
+  A Mac app that brings the SI (super intelligence) agents you already use into one room, so they can work it out with you and with each other.
+</p>
 
-Silkwire is a Mac app that brings the super-intelligent (SI) teammates you already use, like Claude, Codex and OpenClaw, into one room, signed in with your own accounts. Tell them what you dream of making, and they work it out with you, and with each other, until it's real.
+<p align="center">
+  <a href="#where-we-are">Where we are</a> ·
+  <a href="#ways-to-help">Ways to help</a> ·
+  <a href="#building-from-source">Building from source</a> ·
+  <a href="https://silkwire.si">Website</a>
+</p>
 
-Our mascot is Ari, a small spider who walks the wire between you and your team.
+> [!WARNING]
+> **Silkwire is in early development.** There is no release and no download yet. It runs on our own Mac while we build it, things break, and some of what's described here is still a plan. If that sounds like a fun place to be, read on.
 
-> **Status: early development.** Silkwire is not ready for everyday use yet. Things change quickly, some connections are unfinished, and there is no signed download. We're sharing the source early so curious people can follow along and help.
+## What Silkwire is
 
-## What it does
+Most SI agents work alone, one company's model in one window. Silkwire puts them in the same room.
 
-- **One room, several agents.** Claude, Codex and agents you run on OpenClaw can talk with you and with each other in a shared conversation.
-- **Your own accounts.** Silkwire uses the official command-line tools you've already signed in to. It never sees or stores your passwords.
-- **Safe hands-on work.** Agents can read the project folders you choose and make changes in private copies. Anything risky, like installing, sending, deleting or deploying, waits for your OK.
-- **Native Mac app.** Written in Swift with SwiftUI and AppKit. No web views in the core app, no bundled third-party packages.
+- **The Collab Room.** Your agents talk to you and to each other in one shared thread. They hand off work, ask each other questions and disagree out loud.
+- **One-on-ones.** Pull any teammate aside for a quiet conversation inside the same Project.
+- **Your own accounts.** Agents sign in with the subscriptions you already have. Silkwire doesn't resell SI access or see your passwords.
+- **You stay in charge.** By default, agents do their work in private copies, and installing, sending, merging or deploying waits for your OK.
+- **Saved on your Mac.** Conversations live on your computer. Agents read the folders you grant them. Letting an agent operate your Mac directly is a separate, stronger permission you choose to give.
+- **Alexandria and Future.** A shared library for plans and decisions, and a place to pin what the project is aiming for.
 
-## Requirements
+It's built for people who have never opened a terminal. You bring the taste and make the call; the team does the work.
 
-- macOS 14 or later
-- Apple's Swift toolchain (Xcode or the Command Line Tools)
-- Optional, for agents: the official [Claude Code](https://docs.anthropic.com/en/docs/claude-code) and [Codex](https://github.com/openai/codex) command-line tools, and/or a local [OpenClaw](https://openclaw.ai) gateway, each signed in with your own account
+## Where we are
 
-## Build
+We label every feature honestly. Only the first label means it actually runs.
 
-Clone the repository (the build reads Git metadata, so a downloaded ZIP won't build):
+| Feature | Status |
+|---|---|
+| Collab Room and one-on-one rooms | ✅ Works in our build |
+| Claude, Codex and Eve (an [OpenClaw](https://github.com/openclaw/openclaw) agent) as teammates | ✅ Works in our build |
+| Asking first before risky actions like installing, sending or deploying | ✅ Works in our build |
+| Agents that keep working without being nudged | 🚧 In progress |
+| Shared memory (Alexandria and Future) | 🚧 In progress |
+| Grok as a teammate | 🚧 In progress |
+| A reproducible build anyone can run | 🚧 In progress |
+| A signed Mac app you can download | 🗓️ Planned |
+| Silkwire for iPhone | 🗓️ Planned |
 
-```sh
-git clone <this repository>
-cd silkwire
+What we're working on right now:
+
+1. **Reliability first.** Every message you send should end up answered or clearly failed, never silently lost.
+2. **One dependable assignment.** Ask for a small change, walk away, and come back to a tested result.
+3. **Memory that arrives with the agent.** A new session should start already knowing the project, its decisions and its unfinished work.
+
+## Ways to help
+
+We're a tiny team: Jason, plus the agents in the room. We're opening up early on purpose, before things are polished, because the early decisions are the ones worth having more minds on.
+
+**Developers.** We'd especially love help with:
+- Swift and macOS app development
+- Running agents reliably: queues, restarts, recovery, permissions
+- Testing, CI, builds and release tooling
+- Security review, especially around agents that can run commands
+
+**Testers.** Once there's a build to try, use it and tell us where you got stuck. No coding needed.
+
+**Designers, writers and makers.** Help shape what Silkwire feels like, or tell us what you'd build with a team like this.
+
+**Getting started:**
+- Browse the [open issues](../../issues), especially ones labeled `good first issue`.
+- Have an idea or a question? [Open an issue](../../issues/new).
+- Not a GitHub person? Write to [hello@silkwire.si](mailto:hello@silkwire.si).
+
+## Building from source
+
+> [!NOTE]
+> We're still making the build reproducible on machines other than ours. If these steps don't work for you, that's a bug we want to hear about.
+
+Requirements: macOS 14 or later, and Apple's Swift toolchain (Xcode or the Command Line Tools).
+
+Clone this repository with Git using the green **Code** button above, then from its folder run the command below. Download ZIP won't work, because the build needs the Git history.
+
+```bash
 swift Scripts/build.swift
 ```
 
-The app appears at `output/release/Silkwire Dev.app`. Run the tests with:
+The app is built into `output/release/Silkwire Dev.app`. To talk to agents, install the official Claude and Codex command-line tools and sign in with your own accounts; Eve connects through a local [OpenClaw](https://github.com/openclaw/openclaw) Gateway. Silkwire reuses those sign-ins and never copies them.
 
-```sh
+To run the test suites:
+
+```bash
 swift Scripts/test.swift
 ```
 
-More detailed build, verification and Staging notes are in [docs/developer-notes.md](docs/developer-notes.md), and the design is described in [docs/architecture.md](docs/architecture.md).
+Deeper technical notes live in [`docs/`](docs): start with [architecture and decisions](docs/architecture.md), the [Staging environment](docs/staging.md) and [trusted team work](docs/trusted-staging.md).
 
-## Known limitations
+## How we build it
 
-- The app still assumes a single, named user in several places; making this configurable is on the list.
-- Clean-machine setup hasn't been independently verified yet.
-- Builds are signed ad hoc, so macOS Gatekeeper will warn on other Macs.
+Silkwire is built in Silkwire. Jason works with Eve, Claude and Codex in the project's own Collab Room, and much of the code is written by agents and reviewed by teammates, with Jason guiding the work and deciding what ships. We think that's worth saying plainly. It's also why reliability, permissions and honest status labels are our first priorities: we feel every rough edge ourselves.
 
-## Contributing
+## Security
 
-We'd love help, especially from people who care about motion, typography and calm interfaces. See [CONTRIBUTING.md](CONTRIBUTING.md). To report a security problem privately, see [SECURITY.md](SECURITY.md).
+Silkwire runs agents that can read files and, with your permission, run commands. Please don't report security problems in public issues. Write to [hello@silkwire.si](mailto:hello@silkwire.si) with "Security" in the subject, and we'll get back to you privately.
 
 ## License
 
-Silkwire's source code is licensed under the [Apache License 2.0](LICENSE). The bundled Archivo font is licensed separately under the [SIL Open Font License 1.1](Resources/Assets/Fonts/OFL.txt). See [NOTICE](NOTICE) for details.
+Silkwire is released under the [Apache License 2.0](LICENSE). See [`NOTICE`](NOTICE) for attributions, including the bundled Archivo font, which keeps its own SIL Open Font License.
 
-Follow along at [@SilkwireApp](https://x.com/SilkwireApp) and [silkwire.si](https://silkwire.si).
+<p align="center">
+  <sub>© 2026 RocketShift LLC · Created by Jason Armstrong</sub>
+</p>

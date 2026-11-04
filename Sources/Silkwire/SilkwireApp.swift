@@ -3,6 +3,7 @@ import AppKit
 
 struct ConversationView: View {
     @ObservedObject var store: ConversationStore
+    @ObservedObject private var setup = SetupModel.shared
     @ObservedObject var notifications: CompletionNotifications
     @State private var followPaused = false
     @State private var newReplies = false
@@ -146,6 +147,8 @@ struct ConversationView: View {
         .sheet(isPresented: $store.connectionsPresented) { ConnectionsView(store: store) }
         .sheet(isPresented: $store.builderPresented) { BuilderView(store: store) }
         .sheet(isPresented: $store.helpPresented) { NativeHelpView() }
+        .sheet(isPresented: $setup.presented) { OnboardingView(store: store, setup: setup) }
+        .task { try? await Task.sleep(nanoseconds: 1_500_000_000); if setup.shouldAutoPresent(store) { setup.presented = true } }
         .sheet(isPresented: $store.stagingInstallPresented) { StagingInstallView(store: store) }
         .alert("Rename conversation", isPresented: $renaming) {
             TextField("Conversation name", text: $proposedTitle)
@@ -244,7 +247,9 @@ struct ConversationView: View {
                             InitialCircle(name: names[agent]!, size: 24)
                             VStack(alignment: .leading, spacing: 3) {
                                 Text(names[agent]!).font(.system(size: 12, weight: .medium)).foregroundStyle(SilkwireTheme.identity(names[agent]!))
-                                if project.id == store.conversation.projectID { AgentStatus(seat: store.seats[agent] ?? Seat(), reduceMotion: store.preferences.reduceMotion, compact: true) }
+                                if project.id == store.conversation.projectID, store.currentAgent != agent, let job = store.runningBackgroundJob(for: agent) {
+                                    BackgroundJobBadge(card: job, reduceMotion: store.preferences.reduceMotion)
+                                } else if project.id == store.conversation.projectID { AgentStatus(seat: store.seats[agent] ?? Seat(), reduceMotion: store.preferences.reduceMotion, compact: true) }
                                 else { Text("Not connected").font(.system(size: 10)).foregroundStyle(.tertiary) }
                             }
                             Spacer(minLength: 0)
@@ -263,7 +268,8 @@ struct ConversationView: View {
                     ForEach(rooms(project)) { room in conversationRow(room) }
                 }.padding(.bottom, 10)
             }
-        }.background(project.id == store.conversation.projectID ? SilkwireTheme.wash(0.018) : Color.clear, in: RoundedRectangle(cornerRadius: 10))
+        }.background(project.id == store.conversation.projectID ? SilkwireTheme.panel : Color.clear, in: RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(project.id == store.conversation.projectID ? SilkwireTheme.midnightEdge : Color.clear, lineWidth: 1))
         .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(SilkwireTheme.line))
     }
     private var treeBranch: some View { Path { p in p.move(to: CGPoint(x: 5, y: 0)); p.addLine(to: CGPoint(x: 5, y: 15)); p.addLine(to: CGPoint(x: 13, y: 15)) }.stroke(SilkwireTheme.wash(0.12), lineWidth: 1).frame(width: 14, height: 30).accessibilityHidden(true) }
@@ -294,7 +300,8 @@ struct ConversationView: View {
                 }
             }.padding(.vertical, 10).padding(.horizontal, 10).contentShape(Rectangle())
         }.buttonStyle(.plain).padding(.leading, 20).padding(.trailing, 6)
-        .background(room.id == store.conversation.id ? SilkwireTheme.accent.opacity(0.10) : Color.clear, in: RoundedRectangle(cornerRadius: 7))
+        .background(room.id == store.conversation.id ? SilkwireTheme.selectedRow : Color.clear, in: RoundedRectangle(cornerRadius: 7))
+        .padding(.horizontal, 6)  // a little margin so the selection doesn't touch the panel walls
         .disabled(room.id != store.conversation.id && !store.canChangeConversation)
         .contextMenu { conversationActions(room).disabled(!store.canChangeConversation) }
         .accessibilityLabel(room.title + (room.id == store.conversation.id ? ", selected" : ""))
@@ -302,9 +309,10 @@ struct ConversationView: View {
     private var sidebarFooter: some View {
         VStack(spacing: 13) {
             Rectangle().fill(SilkwireTheme.line).frame(height: 1)
+            SetupReminderCard(setup: setup)
             HStack(spacing: 9) {
-                InitialCircle(name: "Jason", size: 30)
-                VStack(alignment: .leading, spacing: 3) { Text("Jason").font(.system(size: 12, weight: .semibold)); Text("Your workspace").font(.system(size: 10)).foregroundStyle(.secondary) }
+                InitialCircle(name: setup.displayName, size: 30)
+                VStack(alignment: .leading, spacing: 3) { Text(setup.displayName).font(.system(size: 12, weight: .semibold)); Text("Your workspace").font(.system(size: 10)).foregroundStyle(.secondary) }
                 Spacer()
                 Button { store.setChime(!store.preferences.completionChime) } label: { Image(systemName: store.preferences.completionChime ? "bell" : "bell.slash").foregroundStyle(store.preferences.completionChime ? SilkwireTheme.accent : Color.secondary) }.buttonStyle(.borderless).help(store.preferences.completionChime ? "Completion chime on · click to mute" : "Completion chime off · click to enable").accessibilityLabel(store.preferences.completionChime ? "Mute completion chime" : "Enable completion chime").disabled(store.storageError != nil)
             }
@@ -460,6 +468,18 @@ struct ConversationView: View {
     }
     /// A second silo: its conversation to read, and a writing space that switches to it.
     /// One composer at a time for now; clicking here moves typing to this conversation.
+    /// The room you're writing in gets the same header row as every other open room
+    /// (Jason, Nov 2: the team room was the only one without one).
+    private var activeRoomHeader: some View {
+        let faces = store.targets.compactMap { names[$0] }.sorted()
+        return HStack(spacing: 8) {
+            Text(store.conversation.title).font(.system(size: 14, weight: .semibold)).lineLimit(1).foregroundStyle(ReadMarks.roomTint(store.conversation))
+            HStack(spacing: -5) { ForEach(faces, id: \.self) { InitialCircle(name: $0, size: 20) } }
+                .accessibilityElement().accessibilityLabel(faces.isEmpty ? "No one selected" : "Writing to " + faces.joined(separator: ", "))
+            Spacer(minLength: 8)
+            Text(faces.count > 1 && faces.count == names.count ? "Everyone" : "Writing here").font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
+        }.padding(.horizontal, 16).padding(.vertical, 10)
+    }
     private func companionSilo(_ other: Conversation) -> some View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
@@ -515,7 +535,7 @@ struct ConversationView: View {
             }.padding(.horizontal, 12).padding(.bottom, 9).padding(.top, 4)
         }
         .frame(maxHeight: .infinity)
-        .background(SilkwireTheme.well(0.06))
+        .background(SilkwireTheme.columnFill)
         .clipShape(RoundedRectangle(cornerRadius: SiloLayout.cornerRadius, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: SiloLayout.cornerRadius, style: .continuous).strokeBorder(SilkwireTheme.line, lineWidth: 1))
         .accessibilityElement(children: .contain).accessibilityLabel("Conversation: \(other.title)")
@@ -603,6 +623,8 @@ struct ConversationView: View {
                                 Group {
                                 if room.id == store.conversation.id {
                 VStack(spacing: 0) {
+                    activeRoomHeader
+                    Rectangle().fill(SilkwireTheme.line).frame(height: 1)
                     transcript.frame(maxWidth: .infinity, maxHeight: .infinity)
                     Rectangle().fill(SilkwireTheme.line).frame(height: 1)
                     composer.fixedSize(horizontal: false, vertical: true)
@@ -702,6 +724,7 @@ struct ConversationView: View {
                 }
                 HStack(spacing: 6) {
                     if let agent = store.currentAgent { WorkingSpider(reduceMotion: store.preferences.reduceMotion); Text(SeatPhase.isConversational(store.seats[agent]?.activity ?? "") ? "Replying" : (store.seats[agent]?.activity ?? "Working")).foregroundStyle(SilkwireTheme.accent) }
+                    else if !store.runningBackgroundJobs.isEmpty { BackgroundJobSummary(cards: store.runningBackgroundJobs, reduceMotion: store.preferences.reduceMotion) }
                     else { Text(store.status).foregroundStyle(.secondary).lineLimit(2).multilineTextAlignment(.trailing).fixedSize(horizontal: false, vertical: true) }
                 }.font(.system(size: 10)).lineLimit(1).frame(maxWidth: 240, alignment: .trailing).help(store.status)
                 if let brief = store.activeProject?.brief, !brief.isEmpty {
@@ -878,7 +901,7 @@ struct ConversationView: View {
                     let waitingAuthors = floor.waiting.compactMap { id in shown.first { $0.id == id }?.author }
                     let pendingAuthors = shown.filter { TranscriptFlow.isHeld($0.author, state: $0.state, agentNames: agentNames, text: $0.text) }.map(\.author) + waitingAuthors
                     let ready = shown.filter { !TranscriptFlow.isHeld($0.author, state: $0.state, agentNames: agentNames, text: $0.text) && !waitingIDs.contains($0.id) }
-                    ForEach(TranscriptFlow.speakingOrder(ready, id: \.id, seq: revealSeq)) { message in TranscriptMessageRow(message: message.forDisplay, query: messageSearch, selectedHit: hit, seat: message.state == "streaming" ? names.first(where: { $0.value == message.author }).flatMap { store.seats[$0.key] } : nil, reduceMotion: store.preferences.reduceMotion, canBuild: store.canChangeConversation, build: { store.prepareBuilder(message.text) }, canStop: store.canStopBuilderMessage(message), stop: { store.stopBuilderMessage(message) }, toggleRead: { store.toggleRead(message.id) }).equatable().frame(maxWidth: 820).frame(maxWidth: .infinity).id(message.id)
+                    ForEach(TranscriptFlow.speakingOrder(ready, id: \.id, seq: revealSeq, group: { $0.requestId })) { message in TranscriptMessageRow(message: message.forDisplay, query: messageSearch, selectedHit: hit, seat: message.state == "streaming" ? names.first(where: { $0.value == message.author }).flatMap { store.seats[$0.key] } : nil, reduceMotion: store.preferences.reduceMotion, canBuild: store.canChangeConversation, build: { store.prepareBuilder(message.text) }, canStop: store.canStopBuilderMessage(message), stop: { store.stopBuilderMessage(message) }, toggleRead: { store.toggleRead(message.id) }).equatable().frame(maxWidth: 820).frame(maxWidth: .infinity).id(message.id)
                         .background(GeometryReader { geometry in Color.clear.preference(key: TranscriptFrames.self, value: [message.id: geometry.frame(in: .named("transcript-viewport"))]) }) }
                     if !pendingAuthors.isEmpty {
                         ThinkingLine(names: pendingAuthors, reduceMotion: store.preferences.reduceMotion)
@@ -984,8 +1007,15 @@ struct ConversationView: View {
                 ForEach(SiloIdentity.pills(participants: store.participants, focusedAgent: store.conversation.focusedAgent), id: \.self) { agent in
                     Button { store.toggleRecipient(agent) } label: {
                         HStack(spacing: 5) { InitialCircle(name: names[agent]!, size: 20); Text(names[agent]!).font(.system(size: 11)); if store.targets.contains(agent) { Image(systemName: "checkmark").font(.caption2) } }.fixedSize()
-                        .padding(.horizontal, 8).padding(.vertical, 5).background(store.targets.contains(agent) ? SilkwireTheme.identity(names[agent]!).opacity(0.15) : Color.clear, in: RoundedRectangle(cornerRadius: 7))
-                    }.buttonStyle(.plain).accessibilityLabel("Send to \(names[agent]!)").accessibilityAddTraits(store.targets.contains(agent) ? .isSelected : []).disabled(store.busy || store.conversation.archived)
+                        .padding(.horizontal, 8).padding(.vertical, 5).background(store.targets.contains(agent) ? SilkwireTheme.chipFill(names[agent]!) : Color.clear, in: RoundedRectangle(cornerRadius: 7))
+                    }.buttonStyle(.plain).accessibilityLabel("Send to \(names[agent]!)").accessibilityAddTraits(store.targets.contains(agent) ? .isSelected : []).disabled(store.conversation.archived)
+                    // Talk any time: each working teammate can be stopped alone.
+                    if store.isWorking(agent) {
+                        Button { store.stopTeammate(agent) } label: { Image(systemName: store.stoppingAgents.contains(agent) ? "hourglass" : "stop.circle") }
+                            .buttonStyle(.borderless).foregroundStyle(.red).disabled(!store.canStopTeammate(agent))
+                            .help("Stop \(names[agent]!) only. Anything waiting for \(names[agent]!) is cancelled; the rest of the team keeps going.")
+                            .accessibilityLabel("Stop \(names[agent]!)")
+                    }
                 }
                 if store.preferences.autoScrollReplies && followPaused {
                     Button("Resume ↓") { messageSearch = ""; followPaused = false }.buttonStyle(.borderless).font(.caption).help("Auto-scroll paused while reading · resume following replies")
@@ -1027,6 +1057,7 @@ struct ConversationView: View {
                         .disabled(!store.preferences.autoScrollReplies)
                         .help("After you press Send, keep your message at the top so long replies start on screen instead of below the fold.")
                     Toggle("Real conversation: everyone replies at once", isOn: Binding(get: { store.preferences.openFloor }, set: { store.setOpenFloor($0) })).toggleStyle(.checkbox)
+                    Toggle("Let teammates respond to each other afterwards", isOn: Binding(get: { store.preferences.chimeIn }, set: { store.setChimeIn($0) })).toggleStyle(.checkbox).disabled(!store.preferences.openFloor).padding(.leading, 18)
                         .help("Experimental. Every teammate starts at the same time and replies when ready; anyone with nothing to add stays silent instead of posting Pass. Uses more of your subscriptions. Turn off to take turns again.")
                     Button { showOptions = false; showContext = true } label: { Label("Context & folders", systemImage: "info.circle") }.buttonStyle(.borderless)
                 }.font(.callout).padding(12).frame(maxWidth: .infinity, alignment: .leading).background(SilkwireTheme.surface, in: RoundedRectangle(cornerRadius: 10))
@@ -1092,18 +1123,18 @@ struct ConversationView: View {
                     }.buttonStyle(.plain).disabled(!store.canPass)
                         .help("Nothing to add? Let the team keep going without you: up to \(ConversationStore.relayLimit) replies, shared among whoever has something to say. Stop or Send steps back in.")
                         .accessibilityLabel("Pass: let the team continue")
-                    let sendEnabled = store.busy ? store.canQueue : store.canSend
+                    let sendEnabled = store.canSend
                     if store.busy && !hasInput {
-                        Button { store.stop() } label: { Text(store.stopping ? "Stopping…" : "Stop").font(.system(size: 12, weight: .semibold)).lineLimit(1).fixedSize().foregroundStyle(.white).padding(.horizontal, 16).padding(.vertical, 7).background(Color.red.opacity(store.stopping ? 0.45 : 0.8), in: RoundedRectangle(cornerRadius: 7)) }.buttonStyle(.plain).disabled(store.stopping).keyboardShortcut(.escape, modifiers: []).help("Stop the team. Start typing to send an addition instead.")
+                        Button { store.stop() } label: { Text(store.stopping ? "Stopping…" : "Stop").font(.system(size: 12, weight: .semibold)).lineLimit(1).fixedSize().foregroundStyle(.white).padding(.horizontal, 16).padding(.vertical, 7).background(Color.red.opacity(store.stopping ? 0.45 : 0.8), in: RoundedRectangle(cornerRadius: 7)) }.buttonStyle(.plain).disabled(store.stopping).keyboardShortcut(.escape, modifiers: []).help("Stop the whole team. Start typing to talk to them instead, or stop one teammate from their name above.")
                     } else {
                     Button { store.send() } label: { Text("Send").font(.system(size: 12, weight: .semibold)).lineLimit(1).fixedSize().foregroundStyle(sendEnabled ? .white : Color.secondary).padding(.horizontal, 16).padding(.vertical, 7).background(sendEnabled ? SilkwireTheme.sendFill : SilkwireTheme.wash(0.065), in: RoundedRectangle(cornerRadius: 7)) }.buttonStyle(.plain).disabled(!sendEnabled).keyboardShortcut(.return, modifiers: .command)
-                        .help(store.busy ? "Send an addition now. It reaches the team when this round of replies finishes." : "Send")
+                        .help(store.busy ? "Send now. Teammates who are free get it right away; the rest as soon as they finish." : "Send")
                     }
                 }.padding(.horizontal, 12).padding(.bottom, 9).padding(.top, 4)
                 if store.hasQueued {
                     HStack(spacing: 8) {
                         Image(systemName: "tray.and.arrow.up").foregroundStyle(SilkwireTheme.stagingTint)
-                        Text("Your addition is saved and goes to the team when this round of replies finishes.").font(.caption).foregroundStyle(.secondary)
+                        Text("A message saved by an earlier version is waiting. Bring it back to send it.").font(.caption).foregroundStyle(.secondary)
                         Spacer(minLength: 4)
                         Button("Edit") { store.unqueue() }.buttonStyle(.borderless).font(.caption).help("Bring the waiting addition back into the composer")
                     }.padding(.horizontal, 12).padding(.bottom, 8)
@@ -1245,7 +1276,7 @@ struct TranscriptMessageRow: View, Equatable {
         Button { expanded = true } label: {
             HStack(spacing: 9) {
                 InitialCircle(name: message.author, size: 22)
-                Text(message.author).font(.system(size: 15, weight: .semibold)).foregroundStyle(SilkwireTheme.identity(message.author))
+                Text(SetupModel.shared.label(for: message.author)).font(.system(size: 15, weight: .semibold)).foregroundStyle(SilkwireTheme.identity(message.author))
                 Text(jasonSummary).lineLimit(1).truncationMode(.tail).foregroundStyle(.secondary)
                 if let count = message.attachments?.count, count > 0 { Label("\(count)", systemImage: "paperclip").font(.caption).foregroundStyle(.secondary) }
                 Spacer(minLength: 8)
@@ -1259,7 +1290,7 @@ struct TranscriptMessageRow: View, Equatable {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 9) {
                 InitialCircle(name: message.author, size: 26)
-                Text(message.author).font(.system(size: 15, weight: .semibold)).foregroundStyle(SilkwireTheme.identity(message.author))
+                Text(SetupModel.shared.label(for: message.author)).font(.system(size: 15, weight: .semibold)).foregroundStyle(SilkwireTheme.identity(message.author))
                 // One status per teammate: while replying, the card's footer carries it.
                 // Honest problem states keep their word and gain an icon, in the attention color.
                 if message.state != "streaming" || seat == nil {
@@ -1344,7 +1375,7 @@ struct TranscriptMessageRow: View, Equatable {
             CommandMenu("View") {
                 Button(store.preferences.sidebarVisible ? "Hide Sidebar" : "Show Sidebar") { store.setSidebarVisible(!store.preferences.sidebarVisible) }.keyboardShortcut("s", modifiers: [.control, .command])
             }
-            CommandGroup(replacing: .help) { Button("Silkwire Help") { store.helpPresented = true } }
+            CommandGroup(replacing: .help) { Button("Silkwire Help") { store.helpPresented = true }; Button("Set Up Silkwire…") { SetupModel.shared.presented = true } }
         }
         Settings { NativeSettingsView(store: store, notifications: notifications) }
     }

@@ -372,6 +372,10 @@ import Foundation
                 // Refused before any I/O: the last saved state is unchanged.
                 await recordFailure(id, lease: lease, note: "The ledger had no room to save this step; nothing was automatically replayed.")
                 return
+            } catch let failure as BackgroundWorkReportedFailure {
+                // Same review pause as any failure, but keep the real reason.
+                await recordFailure(id, lease: lease, note: failure.note)
+                return
             } catch {
                 await recordFailure(id, lease: lease, note: "Step outcome needs host review; nothing was automatically replayed.")
                 return

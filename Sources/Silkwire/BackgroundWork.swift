@@ -74,6 +74,10 @@ enum BackgroundWorkStoppedStep: Equatable, Sendable {
 // busy: the runner's host-call queue is full; nothing changed, try again.
 // ledgerFull: admission refused because the bounded ledger has no room; nothing changed.
 enum BackgroundWorkError: Error { case invalidInput, invalidSnapshot, unavailable, reconciliationRequired, capacity, storage, busy, ledgerFull }
+/// A step that fully finished (its physical exit was confirmed) but did not succeed,
+/// with the plain reason. The job still pauses for review exactly as before; the
+/// difference is that the room is told WHY instead of a generic "needs review".
+struct BackgroundWorkReportedFailure: Error, Equatable { let note: String }
 
 @MainActor struct BackgroundWorkContext {
     let item: BackgroundWorkItem

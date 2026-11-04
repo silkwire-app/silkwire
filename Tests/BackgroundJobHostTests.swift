@@ -115,6 +115,16 @@ import Foundation
         check(card.stateLabel == "Needs review" && !card.holdsWorkspace, "uncertain work needs review; with no physical hold, the workspace is free again")
         card.startedAt = Date(timeIntervalSince1970: 100); card.endedAt = Date(timeIntervalSince1970: 172)
         check(card.elapsed() == 72, "elapsed time runs from start to end")
+        // The room's live status (Jason, Nov 3): words come from the host's phase, never a guessed percentage.
+        var live = card; live.endedAt = nil
+        live.phase = .queued; check(BackgroundJobWords.status(live) == "Waiting to start" && !live.isLive, "a queued job says it's waiting")
+        live.phase = .running; check(BackgroundJobWords.status(live) == "Working in the background" && live.isLive, "a running job says so")
+        live.phase = .stopping; check(BackgroundJobWords.status(live) == "Stopping" && live.isLive, "a stopping job says Stopping")
+        live.phase = .running
+        let at = Date(timeIntervalSince1970: 225)
+        check(BackgroundJobWords.summary([live], at: at) == "Codex · Run build check · " + ComputerTaskRow.elapsed(125), "one job names the teammate, the work and the time")
+        var other = live; other.startedAt = Date(timeIntervalSince1970: 200)
+        check(BackgroundJobWords.summary([live, other], at: at) == "2 jobs running · " + ComputerTaskRow.elapsed(125), "several jobs show a count and the longest time")
         check((try? JSONDecoder().decode(BackgroundJobCard.Phase.self, from: Data(#""finishedSomehow""#.utf8))) == .unknown, "a phase from a newer build decodes as unknown")
         var conversation = Conversation(); conversation.backgroundJobs = [card]
         let encoded = try JSONEncoder().encode(conversation)

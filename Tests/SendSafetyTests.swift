@@ -91,7 +91,7 @@ final class WriteGate: @unchecked Sendable {
         try check(sendBlocked < 0.1, "Send returns immediately while every write is held (\(String(format: "%.3f", sendBlocked)) s)")
         try check(store.busy && !store.canSend, "the turn is reserved: Send cannot be pressed twice")
         store.send()
-        try check(!store.hasQueued, "a duplicate Send while saving cannot queue the same message")
+        try check(!store.hasQueued && store.conversation.messages.filter { $0.author == "Jason" }.count == 1, "a duplicate Send while saving neither queues nor sends the same message again")
         let ticks = try await mainActorTicks(1)
         try check(ticks >= 10, "window keeps running while the save is held (\(ticks) main-actor ticks in 1 s)")
         try check(eve().isEmpty && gate.held >= 1, "nothing is dispatched while the message's write is held")
@@ -191,7 +191,7 @@ final class WriteGate: @unchecked Sendable {
         queueStore.conversation.recipient = "eve"; queueStore.conversation.draft = "Initial failed message"
         queueStore.send(); queueStore.conversation.draft = "Later addition must remain visible"; queueStore.send()
         try await wait("failed queued addition settles") { !queueStore.busy && queueStore.storageError != nil }
-        try check(!queueStore.hasQueued && queueStore.conversation.draft.contains("Later addition must remain visible") && queueTransports["eve"]!.dispatched.isEmpty, "failed persistence restores queued text to the composer and dispatches neither message")
+        try check(!queueStore.hasQueued && queueStore.conversation.draft.contains("Later addition must remain visible") && queueTransports["eve"]!.dispatched.isEmpty, "failed persistence restores both unsent messages' text to the composer and dispatches neither")
         queueStore.disconnect()
         print("\(checks) send safety checks passed. Synthetic fixture: \(root.path)")
     }

@@ -76,23 +76,26 @@ struct ThemePalette: Equatable {
         accent: ThemeRGB(red: 0.70, green: 0.57, blue: 0.99),
         // Layered charcoal (Jason, Oct 26): still dark, but each surface is its own
         // quiet shade with a trace of color, the way Parchment separates its papers.
-        sidebar: ThemeRGB(red: 0.128, green: 0.133, blue: 0.145),      // soft slate gray, a step lighter than the chat
-        sidebarFloor: ThemeRGB(red: 0.112, green: 0.117, blue: 0.128),
-        surface: ThemeRGB(red: 0.060, green: 0.058, blue: 0.072),      // ink-charcoal
-        card: ThemeRGB(red: 0.092, green: 0.088, blue: 0.108),         // lifted, hint of plum
-        window: ThemeRGB(red: 0.050, green: 0.049, blue: 0.062),
+        // Style guide (Jason, Nov 2, from Claude.app's mockup): near-black frame #0d0d10,
+        // chat and panels #151519, bubbles #1c1c21, borders #29292f.
+        sidebar: ThemeRGB(hex: 0x0d0d10),
+        sidebarFloor: ThemeRGB(hex: 0x0d0d10),
+        surface: ThemeRGB(hex: 0x151519),
+        card: ThemeRGB(hex: 0x151519),
+        window: ThemeRGB(hex: 0x0d0d10),
         ink: ThemeRGB(red: 1, green: 1, blue: 1),
         secondaryInk: ThemeRGB(red: 0.66, green: 0.66, blue: 0.66),
         lineOpacity: 0.075,
         washStrength: 1,
         well: ThemeRGB(red: 0, green: 0, blue: 0),
         wellStrength: 1,
-        jasonBubble: ThemeRGB(red: 0.155, green: 0.142, blue: 0.196),
+        jasonBubble: ThemeRGB(hex: 0x1c1c21),
         identities: [
             "Jason": ThemeRGB(red: 0.84, green: 0.87, blue: 0.94),
-            "Eve": ThemeRGB(red: 0.76, green: 0.65, blue: 1.0),
-            "Claude": ThemeRGB(red: 0.96, green: 0.72, blue: 0.51),
-            "Codex": ThemeRGB(red: 0.43, green: 0.84, blue: 0.78)
+            "Eve": ThemeRGB(hex: 0xb5a8f9),
+            "Claude": ThemeRGB(hex: 0xe4a97a),
+            "Codex": ThemeRGB(red: 0.43, green: 0.84, blue: 0.78),
+            "Grok": ThemeRGB(hex: 0x93aef9)
         ],
         projectBlue: ThemeRGB(red: 0.51, green: 0.73, blue: 1)
     )
@@ -119,7 +122,8 @@ struct ThemePalette: Equatable {
             "Jason": ThemeRGB(red: 0.243, green: 0.290, blue: 0.369),  // slate
             "Eve": ThemeRGB(red: 0.416, green: 0.247, blue: 0.710),    // plum
             "Claude": ThemeRGB(red: 0.600, green: 0.255, blue: 0.098), // terracotta
-            "Codex": ThemeRGB(red: 0.110, green: 0.400, blue: 0.373)   // deep teal
+            "Codex": ThemeRGB(red: 0.110, green: 0.400, blue: 0.373),  // deep teal
+            "Grok": ThemeRGB(red: 0.173, green: 0.369, blue: 0.620)    // deep blue
         ],
         projectBlue: ThemeRGB(red: 0.173, green: 0.369, blue: 0.620)
     )
@@ -243,7 +247,7 @@ extension ThemePalette {
 // Staging's orange marker deepens to burnt orange on Parchment so it stays readable.
 extension ThemePalette {
     /// Style guide (Nov 2): Parchment teammate cards lift to near-white, like Midnight's lighter cards.
-    var agentBubble: ThemeRGB { isLight ? paperWhite : ThemeRGB(red: 0.124, green: 0.117, blue: 0.143) }
+    var agentBubble: ThemeRGB { isLight ? paperWhite : ThemeRGB(hex: 0x1c1c21) }
     /// Confirmed success only (a real passing receipt, "Ready").
     /// Parchment green is a shade deeper than the guide (#2E7D4F) so 12 pt pill text clears 4.5:1 on its tint.
     var success: ThemeRGB { isLight ? ThemeRGB(red: 0.13, green: 0.40, blue: 0.24) : ThemeRGB(red: 0.37, green: 0.83, blue: 0.54) }
@@ -251,7 +255,34 @@ extension ThemePalette {
     /// Parchment burnt orange is a shade deeper than the guide (#985218) so pill text clears 4.5:1 on the page too.
     var attention: ThemeRGB { isLight ? ThemeRGB(red: 0.52, green: 0.27, blue: 0.07) : ThemeRGB(red: 0.96, green: 0.70, blue: 0.26) }
     /// Alexandria's page: Parchment keeps its bright sheet; Midnight gets a plain neutral charcoal.
-    var reading: ThemeRGB { isLight ? paperWhite : ThemeRGB(red: 0.110, green: 0.110, blue: 0.114) }
+    var reading: ThemeRGB { isLight ? paperWhite : ThemeRGB(hex: 0x151519) }
     var bodyInk: ThemeRGB { isLight ? ink : ThemeRGB(red: 0.86, green: 0.86, blue: 0.88) }
     var stagingTint: ThemeRGB { isLight ? ThemeRGB(red: 0.62, green: 0.27, blue: 0) : ThemeRGB(red: 1, green: 0.584, blue: 0) }
+}
+
+extension ThemeRGB {
+    /// A 0xRRGGBB value, as written in Jason's style guides.
+    init(hex: UInt32) {
+        self.init(red: Double((hex >> 16) & 0xff) / 255, green: Double((hex >> 8) & 0xff) / 255, blue: Double(hex & 0xff) / 255)
+    }
+}
+
+// Midnight style guide (Jason, Nov 2): one set of borders, rows and chips for chat, Alexandria and
+// Future alike. Parchment keeps its own look; these only change Midnight.
+extension ThemePalette {
+    /// Card, column and field edges on Midnight.
+    var border: ThemeRGB { ThemeRGB(hex: 0x29292f) }
+    /// The selected conversation in the sidebar.
+    var selectedRow: ThemeRGB { ThemeRGB(hex: 0x212127) }
+    /// Solid chip backgrounds behind each teammate's initial; nil uses a tint of their color.
+    func chipFill(_ name: String) -> ThemeRGB? {
+        guard !isLight else { return nil }
+        switch name {
+        case "Eve": return ThemeRGB(hex: 0x292541)
+        case "Claude": return ThemeRGB(hex: 0x362b21)
+        case "Codex": return ThemeRGB(hex: 0x203330)
+        case "Grok": return ThemeRGB(hex: 0x1f2942)
+        default: return nil
+        }
+    }
 }

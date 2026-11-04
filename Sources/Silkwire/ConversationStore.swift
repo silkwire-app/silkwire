@@ -13,7 +13,6 @@ private final class PersistenceCompletion: @unchecked Sendable {
 @MainActor final class ConversationStore: ObservableObject {
     let persistenceQueue = DispatchQueue(label: "app.silkwire.persistence", qos: .utility)
     var persistenceWriter: @Sendable (Data, URL) throws -> Void = { try $0.write(to: $1, options: .atomic) }
-    private var savingRequest: String?
     private var scheduledSave: Task<Void, Never>?
     private var persistenceRevision: UInt64 = 0
     private(set) var persistenceWriteCount = 0
@@ -165,17 +164,22 @@ private final class PersistenceCompletion: @unchecked Sendable {
     /// The reply being written right now in this conversation (the speaking teammate's,
     /// else the first streaming reply of the active request), for "Jump to active reply".
     var activeReplyMessageID: UUID? {
-        guard busy, let request = activeRequest else { return nil }
-        let streaming = conversation.messages.filter { $0.requestId == request && $0.author != "Jason" && $0.state == "streaming" }
+        guard busy, !outgoing.isEmpty else { return nil }
+        let streaming = conversation.messages.filter { $0.requestId.map { outgoing[$0] != nil } == true && $0.author != "Jason" && $0.state == "streaming" }
         if let agent = currentAgent, let name = names[agent], let match = streaming.first(where: { $0.author == name }) { return match.id }
         return streaming.first?.id
     }
     @Published var seats = Dictionary(uniqueKeysWithValues: agents.map { ($0, Seat()) })
     @Published var status = "Connect your team to begin."
     @Published var storageError: String?
+    /// Something is running in this room: at least one message is still with the team.
+    /// (Talk any time: Send stays available while busy; see `outgoing`.)
     @Published var busy = false
     @Published var connecting = false
+    /// Stop for the whole team is in progress.
     @Published var stopping = false
+    /// Teammates Jason stopped one at a time whose replies haven't ended yet.
+    @Published private(set) var stoppingAgents: Set<String> = []
     private var lockFD: Int32 = -1
     private var room: NativeRoom?
     /// Staging computer control (screen, input, unsandboxed shell, durable tasks). nil elsewhere.
@@ -219,13 +223,13 @@ private final class PersistenceCompletion: @unchecked Sendable {
             idleSiloOrder.append(previous.id)
             self.room = nil; folderScopes = []; generation = UUID()
             readyTimer?.cancel(); connectionRefreshTask?.cancel(); connectionInspectionID = nil; connectionsLoading = false
-            trustedReceipts = [:]; activeRequest = nil
+            trustedReceipts = [:]; clearOutgoing()
             while idleSiloOrder.count > 3, let first = idleSiloOrder.first { discardIdleSilo(first) }
         } else {
             // Do not globally disconnect: other idle rooms still belong to their silos.
             generation = UUID(); readyTimer?.cancel(); room?.close(); room = nil; releaseFolders()
             connectionRefreshTask?.cancel(); connectionInspectionID = nil; connectionsLoading = false
-            trustedReceipts = [:]; activeRequest = nil
+            trustedReceipts = [:]; clearOutgoing()
         }
         connecting = false; busy = false; stopping = false
         seats = Dictionary(uniqueKeysWithValues: agents.map { ($0, Seat()) })
@@ -242,11 +246,47 @@ private final class PersistenceCompletion: @unchecked Sendable {
         return true
     }
     private var readyTimer: Task<Void, Never>?
-    private var activeRequest: String?
-    private var sentDraft: String?
-    /// Attachments that left the composer with the sent prompt (restored if it can't be sent).
-    private var sentAttachments: [Attachment] = []
-    private var accepted = false
+    /// One message on its way to the team. Talk any time: several can be live at once, each
+    /// with its own save, acceptance and draft, so none of them can be confused for another.
+    private struct Outgoing {
+        /// Still being written to disk; it is dispatched only once that write lands.
+        var saving = true
+        /// The room took it. From here on it is never restored to the composer or resent.
+        var accepted = false
+        /// The composer text and attachments it took, put back if it is never sent.
+        var draft: String?
+        var attachments: [Attachment] = []
+        /// Who it is addressed to.
+        var targets: [String] = []
+        /// Teammates Jason stopped while it was still being saved: it never goes to them.
+        var excluded: Set<String> = []
+    }
+    private var outgoing: [String: Outgoing] = [:]
+    /// The newest live message (requests are UUIDs, so order is kept separately).
+    private var outgoingOrder: [String] = []
+    private var activeRequest: String? { outgoingOrder.last }
+    private func addOutgoing(_ request: String, _ value: Outgoing) {
+        outgoing[request] = value; outgoingOrder.append(request); busy = true
+    }
+    private func removeOutgoing(_ request: String) {
+        outgoing.removeValue(forKey: request); outgoingOrder.removeAll { $0 == request }
+        busy = !outgoing.isEmpty
+        if !busy { stopping = false; stoppingAgents = [] } else { refreshStoppingAgents() }
+    }
+    private func clearOutgoing() { outgoing = [:]; outgoingOrder = []; stoppingAgents = [] }
+    /// Teammates with something still in flight here: a reply being written, or one of
+    /// Jason's messages waiting for them to finish an earlier one.
+    func isWorking(_ agent: String) -> Bool {
+        guard let name = names[agent], let oldest = outgoingOrder.first else { return false }
+        // Reply cards follow their message, so the scan stops at the oldest live message
+        // (the pills ask this on every redraw while replies stream).
+        for message in conversation.messages.reversed() {
+            if message.author == name, message.state == "queued" || message.state == "streaming", let request = message.requestId, outgoing[request] != nil { return true }
+            if message.requestId == oldest, Self.isDispatchInput(message) { break }
+        }
+        return false
+    }
+    private func refreshStoppingAgents() { stoppingAgents = stoppingAgents.filter(isWorking) }
     private var acceptanceStarted = false
     let directory: URL
     let environment: WorkspaceEnvironment
@@ -258,14 +298,17 @@ private final class PersistenceCompletion: @unchecked Sendable {
     }
     var targets: [String] { let selected = selectedRecipients; return !selected.isEmpty && selected.allSatisfy({ roomParticipants.contains($0) }) ? roomParticipants.filter { selected.contains($0) } : [] }
     func toggleRecipient(_ agent: String) {
-        guard conversation.focusedAgent == nil, !busy, participants.contains(agent), storageError == nil else { return }
+        // Talk any time: recipients can change while teammates work; each message keeps its own.
+        guard conversation.focusedAgent == nil, participants.contains(agent), storageError == nil else { return }
         var selected = targets
         if selected.contains(agent) { selected.removeAll { $0 == agent } } else { selected.append(agent) }
         conversation.recipient = participants.filter { selected.contains($0) }.joined(separator: ",")
         save()
     }
     var inputCharacterCount: Int { conversation.draft.utf16.count + conversation.draftAttachments.filter { !$0.isImage }.reduce(0) { $0 + $1.text.utf16.count } }
-    var canSend: Bool { storageError == nil && !builderRunning && !busy && !connecting && (!conversation.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !conversation.draftAttachments.isEmpty) && inputCharacterCount <= 24000 && !conversation.archived && !targets.isEmpty && targets.allSatisfy { seats[$0]?.state == "connected" } }
+    /// Talk any time: sending while teammates work is allowed. Free teammates get the message
+    /// at once and busy ones as soon as they finish. Only a Stop still in progress holds it.
+    var canSend: Bool { storageError == nil && !builderRunning && !stopping && !connecting && targets.allSatisfy { !stoppingAgents.contains($0) } && (!conversation.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !conversation.draftAttachments.isEmpty) && inputCharacterCount <= 24000 && !conversation.archived && !targets.isEmpty && targets.allSatisfy { seats[$0]?.state == "connected" } }
     /// Private team workspaces live in the Staging library for both environments.
     /// Tests inject a synthetic sandbox; the owner's library is never substituted.
     let workspaceSandbox: WorkspaceEnvironment
@@ -275,6 +318,8 @@ private final class PersistenceCompletion: @unchecked Sendable {
         backgroundWiring = environment.agentTest ? nil : backgroundJobs
         self.environment = environment
         self.workspaceSandbox = environment.agentTest ? environment : workspaceSandbox
+        // The only place Team Workspaces is trusted for background-run Git metadata (Codex review).
+        NativeBuilder.registerHostWorkspaceStore((environment.agentTest ? environment : workspaceSandbox).library.appendingPathComponent("Team Workspaces/" + (environment.staging ? "staging" : "working")))
         directory = override ?? environment.launchDirectory
         do {
             let updating = environment.staging && !environment.agentTest && environment.library.standardizedFileURL == WorkspaceEnvironment.stagingSandbox.library.standardizedFileURL ? try StagingInstaller.startupLock() : -1
@@ -454,8 +499,8 @@ private final class PersistenceCompletion: @unchecked Sendable {
             }
         }
     }
-    private func queueDelta(agent: String, text: String) {
-        pendingDeltas[agent, default: ""] += text
+    private func queueDelta(request: String, agent: String, text: String) {
+        pendingDeltas[request + "\u{1}" + agent, default: ""] += text
         if pendingDeltas.values.reduce(0, { $0 + $1.utf16.count }) >= 64000 { flushDeltas(); return }
         guard deltaFlush == nil else { return }
         deltaFlush = Task { [weak self] in
@@ -467,8 +512,10 @@ private final class PersistenceCompletion: @unchecked Sendable {
         deltaFlush?.cancel(); deltaFlush = nil
         guard !pendingDeltas.isEmpty else { return }
         let chunks = pendingDeltas; pendingDeltas = [:]
-        guard let request = activeRequest else { return }
-        for (agent, text) in chunks {
+        for (key, text) in chunks {
+            let parts = key.components(separatedBy: "\u{1}")
+            guard parts.count == 2, outgoing[parts[0]] != nil else { continue }
+            let request = parts[0], agent = parts[1]
             updateReply(request: request, agent: agent) { if $0.state == "streaming" { $0.text += text } }
             seats[agent]?.activity = "Replying"; seats[agent]?.lastEventAt = Date()
         }
@@ -719,8 +766,9 @@ private final class PersistenceCompletion: @unchecked Sendable {
     func setAutoScroll(_ enabled: Bool) { preferences.autoScrollReplies = enabled; save() }
     func setStartRepliesAtPrompt(_ enabled: Bool) { preferences.startRepliesAtPrompt = enabled; save() }
     func setOpenFloor(_ enabled: Bool) { preferences.openFloor = enabled; save() }
-    /// The latest request in which a teammate stayed silent (open-floor PASS).
-    private var silentRequest: String?
+    func setChimeIn(_ enabled: Bool) { preferences.chimeIn = enabled; save() }
+    /// Live requests in which a teammate stayed silent (open-floor PASS).
+    private var silentRequests: Set<String> = []
     /// Jason's blue U / green R markers. Only he changes them; scrolling never does.
     var unreadCount: Int { ReadMarks.unreadCount(conversation.messages) }
     func unreadCount(for id: UUID) -> Int {
@@ -937,7 +985,7 @@ private final class PersistenceCompletion: @unchecked Sendable {
         Task { [weak self] in
             guard let self, self.generation == token, room.isOpen else { return }
             if value["action"] as? String == "send" {
-                guard let request = value["requestId"] as? String, self.activeRequest == request else { return }
+                guard let request = value["requestId"] as? String, self.outgoing[request] != nil else { return }
                 guard !self.stopping else {
                     self.receiveEvent(["type": "rejected", "requestId": request, "message": "Stopped before dispatch. Your draft is kept."], generation: token)
                     return
@@ -1015,17 +1063,19 @@ private final class PersistenceCompletion: @unchecked Sendable {
     }
     func send() {
         composerFlush?()
-        // Sending while the team is working queues the addition instead of blocking.
-        if busy {
-            if savingRequest != nil, let sentDraft, conversation.draft == sentDraft {
-                let submitted = conversation.messages.last { $0.requestId == activeRequest && Self.isDispatchInput($0) }
-                if conversation.draftAttachments.map(\.id) == (submitted?.attachments ?? []).map(\.id) {
-                    status = "Saving your message…"; return
-                }
-            }
-            queueDraft(); return
+        // A composer still showing a message that hasn't reached the team yet is that same
+        // message, not a new one: never send it twice.
+        for request in outgoingOrder {
+            guard let pending = outgoing[request], !pending.accepted, let draft = pending.draft, conversation.draft == draft,
+                  conversation.draftAttachments.map(\.id) == pending.attachments.map(\.id) else { continue }
+            status = pending.saving ? "Saving your message…" : "Sending your message…"; return
         }
-        guard canSend else { return }
+        // Talk any time: there is no queue. A message sent while teammates work is saved and
+        // dispatched now; the room hands it to each teammate as soon as they're free.
+        guard canSend else {
+            if stopping || targets.contains(where: stoppingAgents.contains) { status = "Wait for Stop to finish, then send. Your draft is kept." }
+            return
+        }
         let sentImages = conversation.draftAttachments
         dispatchMessage(text: conversation.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Please review the attached files." : conversation.draft, attachments: sentImages, fromDraft: true)
         // File sent screenshots in the project's Screenshots folder (Alexandria → Screenshots).
@@ -1034,14 +1084,15 @@ private final class PersistenceCompletion: @unchecked Sendable {
         }
     }
     static func isPassContinuation(_ message: Message) -> Bool {
-        message.author == "Silkwire" && (message.detail == "Pass continuation" || message.detail == taskContinuation || message.detail == BackgroundJobText.followUpDetail)
+        message.author == "Silkwire" && (message.detail == "Pass continuation" || message.detail == taskContinuation || message.detail == BackgroundJobText.followUpDetail || message.detail == chimeInDetail)
     }
     static let taskContinuation = "Task continuation"
     private static func isDispatchInput(_ message: Message) -> Bool {
         message.author == "Jason" || isPassContinuation(message)
     }
     private func dispatchMessage(text: String, attachments: [Attachment], fromDraft: Bool, only: [String]? = nil, automaticPass: Bool = false, automaticTask: Bool = false, automaticJob: Bool = false) {
-        builderChimedThisTurn = false
+        // A Builder chirp belongs to the whole busy stretch, not each message within it.
+        if outgoing.isEmpty { builderChimedThisTurn = false }
         let automaticTask = automaticTask || automaticJob
         if !automaticPass && !automaticTask { computer?.noteJasonMessage(conversation.id.uuidString.lowercased()) }
         let lastRequest = conversation.messages.last(where: { Self.isDispatchInput($0) })?.requestId
@@ -1049,9 +1100,11 @@ private final class PersistenceCompletion: @unchecked Sendable {
         // The turn's saveDurably below includes this briefing. Avoid a second
         // synchronous whole-library write before reserving/saving the turn.
         guard refreshProjectMemory(persist: false) else { return }
-        let request = UUID().uuidString.lowercased(), selected = (ReplyOrdering(rawValue: activeProject?.replyOrder ?? "rotating") ?? .rotating).arrange(only ?? targets, round: conversation.messages.filter { Self.isDispatchInput($0) && ["sent", "completed"].contains($0.state) }.count, previous: previousOrder)
+        let arranged = (ReplyOrdering(rawValue: activeProject?.replyOrder ?? "rotating") ?? .rotating).arrange(only ?? targets, round: conversation.messages.filter { Self.isDispatchInput($0) && ["sent", "completed"].contains($0.state) }.count, previous: previousOrder)
+        // Talk any time: teammates who are free go first, so in turn-taking mode a message sent
+        // mid-round isn't held behind someone still finishing an earlier one.
+        let request = UUID().uuidString.lowercased(), selected = arranged.filter { !isWorking($0) } + arranged.filter(isWorking)
         conversation.updatedAt = Date()
-        let history = conversation.messages.filter { ["sent", "completed"].contains($0.state) }.suffix(200).map { ["author": $0.author, "text": $0.text, "state": $0.state] }
         // Only the first dispatch represents Jason's Pass. Later rounds belong
         // to Silkwire, in both the saved transcript and context sent to teammates.
         var input = Message(author: automaticPass || automaticTask ? "Silkwire" : "Jason", text: text, state: "sending", requestId: request, attachments: attachments)
@@ -1067,34 +1120,48 @@ private final class PersistenceCompletion: @unchecked Sendable {
         let openFloor = preferences.openFloor && !automaticPass && !automaticTask && selected.count > 1
         // Reserve the turn first (Send becomes Stop, so no double send), then store the message
         // off the main thread. Dispatch happens only after the message is durably saved.
-        savingRequest = request; activeRequest = request; sentDraft = fromDraft ? conversation.draft : nil; accepted = false; busy = true; stopping = false; status = "Saving your message…"
+        let waitingFor = selected.filter(isWorking)
+        addOutgoing(request, Outgoing(draft: fromDraft ? conversation.draft : nil, attachments: fromDraft ? conversation.draftAttachments : [], targets: selected))
+        status = "Saving your message…"
         // Send empties the composer at once: the prompt now belongs to the transcript.
         // If it can't be saved or dispatched, it returns to the composer (restoreUnsentDraft).
-        if fromDraft { sentAttachments = conversation.draftAttachments; conversation.draft = ""; conversation.draftAttachments = [] }
-        let sendingStatus = "Sending to \(selected.count > 1 ? "the team" : names[selected[0]]!)…"
+        if fromDraft { conversation.draft = ""; conversation.draftAttachments = [] }
+        let sendingStatus = waitingFor.isEmpty
+            ? "Sending to \(selected.count > 1 ? "the team" : names[selected[0]]!)…"
+            : "Sending. \(waitingFor.map { names[$0] ?? $0 }.joined(separator: " and ")) \(waitingFor.count == 1 ? "gets" : "get") it as soon as the current reply ends."
         // Every receipt, in any state: a teammate's running or interrupted work is still
         // reviewable evidence. Its state travels with it so nobody mistakes it for final.
         let buildArtifacts = conversation.messages.filter { $0.author == "Builder" && $0.requestId.flatMap(UUID.init(uuidString:)) != nil && !$0.text.isEmpty }.suffix(8).map { ["id":$0.requestId!,"text":$0.text,"state":$0.state] }
-        let payload: [String: Any] = ["action": "send", "requestId": request, "text": text, "targets": selected, "history": history, "historyTotal": conversation.messages.filter { ["sent", "completed"].contains($0.state) }.count, "buildArtifacts":buildArtifacts, "projectMemory": TeamMemory.render(activeProject?.memory ?? []) + alexandriaContinuityContext + alexandriaWriteContext + alexandriaRecall(query: text) + ProjectMemory.recall(libraryPages, query: text), "openFloor": openFloor, "attachments": attachments.map { ["name": $0.name, "mimeType": $0.mimeType, "data": $0.data.base64EncodedString()] }]
+        var payload: [String: Any] = ["action": "send", "requestId": request, "text": text, "targets": selected, "waitForBusy": true, "buildArtifacts":buildArtifacts, "projectMemory": TeamMemory.render(activeProject?.memory ?? []) + alexandriaContinuityContext + alexandriaWriteContext + alexandriaRecall(query: text) + ProjectMemory.recall(libraryPages, query: text), "openFloor": openFloor, "attachments": attachments.map { ["name": $0.name, "mimeType": $0.mimeType, "data": $0.data.base64EncodedString()] }]
         let token = generation, conversationID = conversation.id
         Task { [weak self] in
             guard let self else { return }
             let stored = await self.saveDurably()
-            if self.savingRequest == request { self.savingRequest = nil }
+            self.outgoing[request]?.saving = false
             // Disconnected, switched or superseded while saving: never dispatch late.
-            guard self.generation == token, self.activeRequest == request, self.conversation.id == conversationID else { return }
-            guard stored, self.storageError == nil, !self.stopping else {
+            guard self.generation == token, self.outgoing[request] != nil, self.conversation.id == conversationID else { return }
+            // A teammate stopped while this was saving never receives it (their Stop covers
+            // every message sent before it). If that leaves nobody, it was never sent at all.
+            let excluded = self.outgoing[request]?.excluded ?? []
+            let remaining = selected.filter { !excluded.contains($0) }
+            guard stored, self.storageError == nil, !self.stopping, !remaining.isEmpty else {
                 for index in self.conversation.messages.indices where self.conversation.messages[index].requestId == request {
                     self.conversation.messages[index].state = Self.isDispatchInput(self.conversation.messages[index]) ? "failed" : "cancelled"
                     self.conversation.messages[index].detail = stored ? "Not sent · stopped before dispatch." : "Not sent · this message could not be saved. Your draft is kept."
                 }
-                self.restoreUnsentDraft()
-                self.activeRequest = nil; self.busy = false; self.stopping = false; self.sentDraft = nil
+                self.restoreUnsentDraft(request)
+                self.removeOutgoing(request)
                 self.status = stored ? "Stopped before sending. Your draft is kept." : (self.storageError ?? "Could not save this message. Your draft is kept.")
                 self.transcriptRevision &+= 1; if stored { self.scheduleSave() }
                 return
             }
-            self.status = sendingStatus
+            // History is taken now, not at Send, so replies that finished while this message
+            // was being saved are part of its context. (Its own entry is still "sending".)
+            let history = self.conversation.messages.filter { ["sent", "completed"].contains($0.state) }
+            payload["history"] = history.suffix(200).map { ["author": $0.author, "text": $0.text, "state": $0.state] }
+            payload["historyTotal"] = history.count
+            payload["targets"] = remaining
+            self.status = excluded.isEmpty ? sendingStatus : "Sending to \(remaining.map { names[$0] ?? $0 }.joined(separator: " and "))…"
             self.command(payload)
         }
     }
@@ -1104,6 +1171,30 @@ private final class PersistenceCompletion: @unchecked Sendable {
         stopTurn()
     }
     private func stopTurn() { guard busy, !stopping else { return }; stopping = true; relayActive = false; unqueue(); status = "Stopping the current reply and remaining queue…"; command(["action": "stop"]) }
+    /// Whether this teammate has something Jason can stop on its own.
+    func canStopTeammate(_ agent: String) -> Bool { busy && !stopping && !stoppingAgents.contains(agent) && isWorking(agent) }
+    /// One teammate's Stop (talk any time): ends their current reply and cancels anything
+    /// already waiting for them, including their running tasks here. Everyone else keeps
+    /// going. A message Jason sends afterwards still reaches them.
+    func stopTeammate(_ agent: String) {
+        guard canStopTeammate(agent), let name = names[agent] else { return }
+        computer?.stopTasks(conversationID: conversation.id.uuidString.lowercased(), agent: agent)
+        stoppingAgents.insert(agent); relayActive = false
+        status = "Stopping \(name). The rest of the team keeps going."
+        // Messages still being saved haven't reached the room, so the room's Stop can't see
+        // them: take this teammate off them here. One whose save already landed was sent to
+        // the room before this Stop, which then cancels or interrupts it there.
+        for request in outgoingOrder where outgoing[request]?.saving == true && outgoing[request]?.targets.contains(agent) == true {
+            outgoing[request]?.excluded.insert(agent)
+            updateReply(request: request, agent: agent) { reply in
+                guard reply.state == "queued" else { return }
+                reply.state = "cancelled"; reply.detail = "Not sent to \(name) · stopped before dispatch."
+            }
+            transcriptRevision &+= 1
+        }
+        command(["action": "stop", "agent": agent])
+        refreshStoppingAgents(); saveSoon()
+    }
     /// The driving banner's Stop: end the current turn and every durable task here.
     private func stopComputerWork() {
         stop()
@@ -1151,6 +1242,9 @@ private final class PersistenceCompletion: @unchecked Sendable {
         conversations.map { savedConversation($0.id) ?? $0 }.filter { backgroundJobRoom($0.id) != nil || !($0.backgroundJobs ?? []).isEmpty }.map(\.id)
     }
     var visibleBackgroundJobs: [BackgroundJobCard] { (conversation.backgroundJobs ?? []).filter { !$0.hidden } }
+    /// Jobs in this conversation that haven't ended, hidden or not: the room should show them (Jason, Nov 3).
+    var runningBackgroundJobs: [BackgroundJobCard] { (conversation.backgroundJobs ?? []).filter { !$0.isEnded } }
+    func runningBackgroundJob(for agent: String) -> BackgroundJobCard? { runningBackgroundJobs.last { $0.agent == agent } }
     /// Card Stop: an immediate fence, then the host's durable acknowledgement. The card
     /// says "Stopping…" until the host's snapshot records the end.
     func stopBackgroundJob(_ id: UUID) { jobDesk?.stop(id, conversationID: conversation.id) }
@@ -1189,8 +1283,8 @@ private final class PersistenceCompletion: @unchecked Sendable {
     /// A task's Stop: if its teammate is replying in this conversation now, stop that reply too.
     private func stopTaskRun(_ task: AgentTask) {
         guard task.conversationID == conversation.id.uuidString.lowercased(), busy, seats[task.agent]?.active == true else { return }
-        // The room stops whole turns; other teammates' tasks stay running for the next round.
-        stopTurn()
+        // Only that teammate stops; other teammates' replies and tasks keep going.
+        stopTeammate(task.agent)
     }
 
     /// Keeps each teammate with a running task going, without Jason pressing Pass.
@@ -1218,8 +1312,9 @@ private final class PersistenceCompletion: @unchecked Sendable {
     /// Substantive (non-pass) teammate replies used in the current Pass.
     @Published private(set) var relayUsed = 0
     private var relayCounted: Set<String> = []
-    /// What Jason sent while the team was working; delivered when the current reply finishes.
-    /// Saved with the conversation, so a crash or restart before delivery loses nothing.
+    /// Legacy: before talk any time, what Jason sent while the team worked waited here until
+    /// the round ended. Nothing queues now; a saved addition from an older build goes back
+    /// into the composer at launch (restoreUnsentAddition) and is never sent automatically.
     var queuedText: String {
         get { conversation.queuedText ?? "" }
         set { conversation.queuedText = newValue.isEmpty ? nil : newValue }
@@ -1229,7 +1324,6 @@ private final class PersistenceCompletion: @unchecked Sendable {
         set { conversation.queuedAttachments = newValue.isEmpty ? nil : newValue }
     }
     var hasQueued: Bool { !queuedText.isEmpty || !queuedAttachments.isEmpty }
-    var canQueue: Bool { busy && storageError == nil && !conversation.archived && (!conversation.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !conversation.draftAttachments.isEmpty) && inputCharacterCount + queuedText.utf16.count <= 24000 && queuedAttachments.count + conversation.draftAttachments.count <= 6 }
     var canPass: Bool {
         storageError == nil && !builderRunning && !connecting && !conversation.archived && !relayActive && !targets.isEmpty && targets.allSatisfy { seats[$0]?.state == "connected" } &&
             (busy || conversation.messages.contains { $0.author != "Jason" && $0.state == "completed" })
@@ -1259,19 +1353,36 @@ private final class PersistenceCompletion: @unchecked Sendable {
         relayDispatched = true
         dispatchMessage(text: text, attachments: [], fromDraft: false, only: next, automaticPass: automatic)
     }
+    /// Chime-in (turn-free chat, step 1): on the open floor teammates answer at the same
+    /// time, so nobody has seen anyone else's reply. When a round Jason started finishes
+    /// with at least two real replies, everyone who answered gets ONE short chance to
+    /// respond to each other: agree, correct, build on or hand off. PASS stays hidden.
+    /// Never chains (a chime-in round never triggers another), never follows Silkwire's
+    /// own rounds, and anything Jason sends meanwhile is delivered first.
+    static let chimeInDetail = "Chime-in"
+    private var chimedRequests: Set<String> = []
+    static func shouldChimeIn(input: Message?, replies: [Message], enabled: Bool) -> Bool {
+        guard enabled, let input, input.author == ReplyScroll.userAuthor else { return false }
+        return replies.filter { $0.state == "completed" && !isPass($0.text) && !OpenFloor.isPass($0.text) }.count >= 2
+    }
+    private func chimeIn(after request: String) -> Bool {
+        guard preferences.openFloor, chimedRequests.insert(request).inserted else { return false }
+        let input = conversation.messages.first { $0.requestId == request && Self.isDispatchInput($0) }
+        let replies = conversation.messages.filter { $0.requestId == request && names.values.contains($0.author) }
+        guard Self.shouldChimeIn(input: input, replies: replies, enabled: preferences.chimeIn) else { return false }
+        let speakers = replies.filter { $0.state == "completed" && !Self.isPass($0.text) }.compactMap { reply in names.first(where: { $0.value == reply.author })?.key }
+        let next = speakers.filter { seats[$0]?.state == "connected" }
+        guard next.count >= 2 else { return false }
+        let text = "Chime-in from Silkwire (not a new message from Jason). You can now read each other's replies to Jason's last message. If a teammate said something you agree with, disagree with, can correct, or can build on, say so briefly and in your own voice, or hand off work. Don't repeat yourself or restate what's already been said. If you have nothing new, reply with exactly PASS."
+        status = "The team is reading each other's replies…"
+        dispatchMessage(text: text, attachments: [], fromDraft: false, only: next, automaticPass: true)
+        if let i = conversation.messages.lastIndex(where: { Self.isDispatchInput($0) }) { conversation.messages[i].detail = Self.chimeInDetail }
+        return true
+    }
     private func endRelay(_ note: String? = nil) {
         guard relayActive else { return }
         relayActive = false
         status = note ?? "Pass finished: \(relayUsed) repl\(relayUsed == 1 ? "y" : "ies") from the team."
-    }
-    func queueDraft() {
-        guard canQueue else { if busy { status = "That addition is too large to queue. Keep it under 24,000 characters and 6 attachments." }; return }
-        let draft = conversation.draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !draft.isEmpty { queuedText = queuedText.isEmpty ? draft : queuedText + "\n\n" + draft }
-        queuedAttachments += conversation.draftAttachments
-        conversation.draft = ""; conversation.draftAttachments = []
-        saveSoon()
-        status = "Addition queued locally; saving it before the next reply round."
     }
     /// After a restart nothing is in progress, so a saved addition goes back in the composer
     /// (never sent automatically) and Jason is told.
@@ -1287,19 +1398,14 @@ private final class PersistenceCompletion: @unchecked Sendable {
         queuedText = ""; queuedAttachments = []
         saveSoon()
     }
-    /// After each turn: deliver anything Jason sent meanwhile, then continue an active Pass.
+    /// Once the room is quiet: job follow-ups, running tasks, chime-in, then an active Pass.
+    /// Automatic rounds never start while any message is still with the team, so whatever
+    /// Jason sent mid-round is always answered first.
     private func afterTurn(request: String, completed: Bool) {
         guard storageError == nil, !connecting, !busy else { return }
-        if hasQueued {
-            let available = targets.filter { seats[$0]?.state == "connected" }
-            guard !available.isEmpty else { unqueue(); status = "Your addition is back in the composer; reconnect a teammate to send it."; return }
-            let text = queuedText.isEmpty ? "Please review the attached files." : queuedText, files = queuedAttachments
-            queuedText = ""; queuedAttachments = []
-            dispatchMessage(text: text, attachments: files, fromDraft: false, only: available)
-            return
-        }
         if deliverJobFollowUps() { return }
         if completed, continueTasks() { return }
+        if completed, !relayActive, chimeIn(after: request) { return }
         guard relayActive else { return }
         guard completed else { endRelay("Pass stopped: a reply didn't finish. Nothing was resent."); return }
         let replies = conversation.messages.filter { $0.requestId == request && names.values.contains($0.author) }
@@ -1321,11 +1427,15 @@ private final class PersistenceCompletion: @unchecked Sendable {
     func shutdown() { stopBuilder(); releaseBuilderFolder(); disconnect(); save(); computer?.shutdown(); jobDesk?.close(); NativeProcess.shutdownOwnedGroups() }
     /// A prompt that was never sent goes back into an empty composer, attachments included.
     /// (An accepted or uncertain message never comes back, so nothing is sent twice.)
-    private func restoreUnsentDraft() {
-        guard let kept = sentDraft else { return }
-        if conversation.draft.isEmpty { conversation.draft = kept }
-        if conversation.draftAttachments.isEmpty { conversation.draftAttachments = sentAttachments }
-        sentAttachments = []
+    /// With talk any time Jason may already be typing the next message, so the unsent text
+    /// goes in front of it rather than being dropped.
+    private func restoreUnsentDraft(_ request: String) {
+        guard let pending = outgoing[request], !pending.accepted, let kept = pending.draft else { return }
+        if conversation.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { conversation.draft = kept }
+        else if !conversation.draft.contains(kept) { conversation.draft = kept + "\n\n" + conversation.draft }
+        let present = Set(conversation.draftAttachments.map(\.id))
+        conversation.draftAttachments = pending.attachments.filter { !present.contains($0.id) } + conversation.draftAttachments
+        outgoing[request]?.draft = nil; outgoing[request]?.attachments = []
     }
     private func transportFailed(_ message: String, persist: Bool = true) {
         flushDeltas()
@@ -1338,9 +1448,8 @@ private final class PersistenceCompletion: @unchecked Sendable {
             conversation.messages[i].detail = queued ? "Not dispatched." : "Outcome unconfirmed — nothing resent."
         }
         // A prompt that never reached a room goes back to the composer (Send clears it first).
-        if !accepted { restoreUnsentDraft() }
-        sentDraft = nil
-        activeRequest = nil; savingRequest = nil
+        for request in outgoingOrder { restoreUnsentDraft(request) }
+        clearOutgoing()
         if persist { saveSoon() }
     }
     func saveSoon() { flushDeltas(); scheduledSave?.cancel(); scheduledSave = nil; saveInBackground() }
@@ -1434,8 +1543,8 @@ private final class PersistenceCompletion: @unchecked Sendable {
         let agent = e["agent"] as? String ?? "", request = e["requestId"] as? String ?? ""
         if ["connectionDetail", "connections", "connectionsFailed"].contains(type), request != connectionInspectionID { return }
         if type == "delta" {
-            guard request == activeRequest, agents.contains(agent) else { return }
-            queueDelta(agent: agent, text: e["text"] as? String ?? ""); return
+            guard outgoing[request] != nil, agents.contains(agent) else { return }
+            queueDelta(request: request, agent: agent, text: e["text"] as? String ?? ""); return
         }
         // Drain partial text before replace/terminal/lifecycle events; never lose the tail.
         flushDeltas()
@@ -1454,7 +1563,7 @@ private final class PersistenceCompletion: @unchecked Sendable {
         switch type {
         case "workspaceReceipt":
             if let receipt = e["receipt"] as? [String: Any], let id = receipt["id"] as? String {
-                let previouslyRunning = busy && request == activeRequest && trustedReceipts[id] != nil && trustedReceipts[id]?["finishedAt"] == nil
+                let previouslyRunning = busy && outgoing[request] != nil && trustedReceipts[id] != nil && trustedReceipts[id]?["finishedAt"] == nil
                 trustedReceipts[id] = receipt
                 if trustedReceipts.count > 8, let oldest = trustedReceipts.keys.first(where: { $0 != id }) { trustedReceipts.removeValue(forKey: oldest) }
                 let state = receipt["status"] as? String ?? "running"
@@ -1473,11 +1582,11 @@ private final class PersistenceCompletion: @unchecked Sendable {
                 } else { saveSoon() }
             }
         case "webInspection":
-            guard request == activeRequest, agents.contains(agent), let result = e["result"] as? [String: Any] else { return }
+            guard outgoing[request] != nil, agents.contains(agent), let result = e["result"] as? [String: Any] else { return }
             conversation.messages.append(Self.webInspectionMessage(result, agent: agent, id: e["inspectionId"] as? String ?? UUID().uuidString, screenshot: (e["screenshot"] as? String).flatMap { Data(base64Encoded: $0) }))
             transcriptRevision &+= 1; saveSoon()
         case "computerAction":
-            guard request == activeRequest, agents.contains(agent), let result = e["result"] as? [String: Any] else { return }
+            guard outgoing[request] != nil, agents.contains(agent), let result = e["result"] as? [String: Any] else { return }
             seats[agent]?.activity = result["ok"] as? Bool == true ? "Computer: " + (result["action"] as? String ?? "action") : "Computer action refused"; seats[agent]?.lastEventAt = Date()
         case "projectAccess": recordProjectAccess(e, agent: agent)
         case "backgroundJob":
@@ -1492,7 +1601,7 @@ private final class PersistenceCompletion: @unchecked Sendable {
             if let values = e["connections"], let data = try? JSONSerialization.data(withJSONObject: values), let details = try? JSONDecoder().decode([ConnectionDetail].self, from: data) { connectionDetails = details.map { var value = $0; value.checkedAt = Date(); return value }; connectionsCheckedAt = Date() }
             connectionsLoading = false; connectionRefreshTask?.cancel()
         case "context":
-            guard request == activeRequest else { return }
+            guard outgoing[request] != nil else { return }
             let supplied = e["supplied"] as? Int ?? 0, total = e["total"] as? Int ?? 0
             guard participants.contains(agent), supplied >= 0, total >= supplied else { return }
             if conversation.historyContext == nil { conversation.historyContext = [:] }
@@ -1500,7 +1609,9 @@ private final class PersistenceCompletion: @unchecked Sendable {
             scheduleSave()
         case "connection":
             guard agents.contains(agent) else { return }
-            seats[agent]?.state = e["state"] as? String ?? "disconnected"
+            let newState = e["state"] as? String ?? "disconnected"
+            if seats[agent]?.state != newState { ConnectionLog.record(agent: agent, event: newState, detail: e["message"] as? String ?? "") }
+            seats[agent]?.state = newState
             seats[agent]?.active = false
             seats[agent]?.message = e["message"] as? String ?? (seats[agent]?.state == "connected" ? "Connected" : "Connecting…")
             if let value = e["identity"], let raw = try? JSONSerialization.data(withJSONObject: value), let identity = try? JSONDecoder().decode(ProviderIdentity.self, from: raw) { conversation.identities[agent] = identity; seats[agent]?.model = identity.model ?? ""; saveSoon() }
@@ -1521,28 +1632,31 @@ private final class PersistenceCompletion: @unchecked Sendable {
             if seats[agent]?.state == "connecting" { seats[agent]?.state = "disconnected"; seats[agent]?.message = e["message"] as? String ?? "Connection was not established. Open Connections to retry." }
             status = seats[agent]?.state == "connected" ? "\(names[agent] ?? agent) is ready. Other connections were left alone." : "\(names[agent] ?? agent): " + (seats[agent]?.message ?? "Open Connections to retry. Nothing was resent.")
         case "accepted":
-            if request == activeRequest {
-                accepted = true
+            if let pending = outgoing[request] {
+                outgoing[request]?.accepted = true; outgoing[request]?.draft = nil; outgoing[request]?.attachments = []
                 if let i = conversation.messages.firstIndex(where: { $0.requestId == request && Self.isDispatchInput($0) }) {
                     conversation.messages[i].state = "sent"
                     // The sent copy was saved before dispatch. Acceptance transfers
                     // ownership from composer to transcript, not reply completion.
-                    if conversation.draft == sentDraft { conversation.draft = "" }
-                    sentAttachments = []
+                    if let draft = pending.draft, conversation.draft == draft { conversation.draft = "" }
                     let sent = Set((conversation.messages[i].attachments ?? []).map(\.id))
                     conversation.draftAttachments.removeAll { sent.contains($0.id) }
                 }
             }
+        case "waiting":
+            // Talk any time: this teammate is finishing an earlier message and gets this one next.
+            guard outgoing[request] != nil, let name = names[agent] else { return }
+            updateReply(request: request, agent: agent) { if $0.state == "queued" { $0.detail = "Waiting · \(name) gets this as soon as the current reply ends." } }
         case "started":
-            guard request == activeRequest else { return }; status = "\(names[agent] ?? agent) is starting…"
+            guard outgoing[request] != nil else { return }; status = "\(names[agent] ?? agent) is starting…"
             seats[agent]?.active = true; seats[agent]?.activity = "Starting reply"; seats[agent]?.startedAt = Date(); seats[agent]?.lastEventAt = Date()
-            updateReply(request: request, agent: agent) { $0.state = "streaming" }
-        case "activity": if request == activeRequest {
+            updateReply(request: request, agent: agent) { $0.state = "streaming"; $0.detail = nil }
+        case "activity": if outgoing[request] != nil {
             status = e["message"] as? String ?? "Reply in progress…"
             seats[agent]?.activity = status; seats[agent]?.lastEventAt = Date()
         }
         case "replace":
-            guard request == activeRequest else { return }
+            guard outgoing[request] != nil else { return }
             seats[agent]?.activity = "Replying"; seats[agent]?.lastEventAt = Date()
             updateReply(request: request, agent: agent) { message in
                 guard message.state == "streaming" else { return }
@@ -1550,32 +1664,39 @@ private final class PersistenceCompletion: @unchecked Sendable {
                 ReadMarks.textChanged(&message, newText: text); message.text = text
             }
         case "finished":
-            guard request == activeRequest else { return }
+            guard outgoing[request] != nil else { return }
+            defer { refreshStoppingAgents() }
             seats[agent]?.active = false; seats[agent]?.activity = e["status"] as? String == "completed" ? "Reply complete" : "Reply ended"
             // Real conversation: a teammate with nothing to add doesn't get a full card. Each
             // pass still shows as its own quiet line ("Codex passed · nothing to add").
             if e["silent"] as? Bool == true, e["status"] as? String == "completed",
                let index = conversation.messages.lastIndex(where: { $0.requestId == request && $0.author == names[agent] }) {
                 conversation.messages[index].text = ConversationStore.passedText; conversation.messages[index].detail = "Passed"
-                conversation.messages[index].state = "completed"; silentRequest = request
+                conversation.messages[index].state = "completed"; silentRequests.insert(request)
                 break
             }
             updateReply(request: request, agent: agent) { $0.state = e["status"] as? String ?? "failed"; $0.detail = e["message"] as? String }
             if e["status"] as? String == "completed" { captureMemory(request: request, agent: agent, persist: false) }
             if e["status"] as? String == "completed" { updateReply(request: request, agent: agent) { if ConversationStore.isPass($0.text) { $0.text = ConversationStore.passedText; $0.detail = "Passed" } } }
         case "settled":
-            guard request == activeRequest else { return }
+            guard let settledRequest = outgoing[request] else { return }
             let replies = conversation.messages.filter { $0.requestId == request && names.values.contains($0.author) }
-            if let i = conversation.messages.firstIndex(where: { $0.requestId == request && Self.isDispatchInput($0) }) { conversation.messages[i].state = accepted ? "sent" : "unconfirmed" }
-            busy = false; stopping = false; activeRequest = nil
+            if let i = conversation.messages.firstIndex(where: { $0.requestId == request && Self.isDispatchInput($0) }) { conversation.messages[i].state = settledRequest.accepted ? "sent" : "unconfirmed" }
+            removeOutgoing(request)
+            let silent = silentRequests.remove(request) != nil
             // Everyone staying silent on the open floor is still a completed turn.
-            let completed = (!replies.isEmpty || silentRequest == request) && replies.allSatisfy { $0.state == "completed" }
+            let completed = (!replies.isEmpty || silent) && replies.allSatisfy { $0.state == "completed" }
             // Every reply was a PASS: besides each teammate's own quiet line, say so once.
-            if completed, silentRequest == request, replies.allSatisfy({ $0.detail == "Passed" }) {
+            if completed, silent, replies.allSatisfy({ $0.detail == "Passed" }) {
                 conversation.messages.append(Message(author: "Silkwire", text: BackgroundJobText.everyonePassed, state: "completed", requestId: request, detail: BackgroundJobText.everyonePassedDetail))
             }
-            status = completed ? "All replies received." : "Turn ended. Stopped, failed and unconfirmed replies are labelled below."
-            if completed {
+            if busy {
+                // Another of Jason's messages is still with the team: not finished yet.
+                status = completed ? "Replies received. The team is still on your newer message." : "Some replies ended early (labelled below). The team is still on your newer message."
+            } else {
+                status = completed ? "All replies received." : "Turn ended. Stopped, failed and unconfirmed replies are labelled below."
+            }
+            if completed && !busy {
                 conversation.unread = !NSApplication.shared.isActive
                 if conversation.unread { NSApplication.shared.dockTile.badgeLabel = "1" }
                 // A Pass is quiet between rounds; do not stack Glass over a Builder chirp.
@@ -1585,8 +1706,8 @@ private final class PersistenceCompletion: @unchecked Sendable {
             }
             afterTurn(request: request, completed: completed)
         case "rejected":
-            guard request == activeRequest else { return }
-            guard !accepted else { transportFailed("The accepted message has an uncertain outcome. Nothing was resent."); return }
+            guard let rejectedRequest = outgoing[request] else { return }
+            guard !rejectedRequest.accepted else { transportFailed("The accepted message has an uncertain outcome. Nothing was resent."); return }
             let detail = "Not sent · " + (e["message"] as? String ?? "Message was not dispatched.")
             for index in conversation.messages.indices where conversation.messages[index].requestId == request {
                 conversation.messages[index].state = Self.isDispatchInput(conversation.messages[index]) ? "failed" : "cancelled"
@@ -1594,14 +1715,14 @@ private final class PersistenceCompletion: @unchecked Sendable {
             }
             // A confirmed pre-dispatch rejection is not a broken connection.
             // Preserve both the composer and healthy room/provider sessions.
-            restoreUnsentDraft()
-            activeRequest = nil; busy = false; stopping = false; sentDraft = nil
+            restoreUnsentDraft(request)
+            removeOutgoing(request)
             status = detail; transcriptRevision &+= 1; saveSoon()
         case "disconnected": transportFailed("Disconnected. Nothing was resent.")
         case "notice": status = e["message"] as? String ?? "Connector notice"
         default: break
         }
-        if ["started", "replace", "finished", "settled"].contains(type) { transcriptRevision &+= 1 }
+        if ["waiting", "started", "replace", "finished", "settled"].contains(type) { transcriptRevision &+= 1 }
         if ["accepted", "started", "finished", "settled"].contains(type) { saveSoon() }
         else if type == "replace" { scheduleSave() }
     }
@@ -1622,7 +1743,7 @@ private final class PersistenceCompletion: @unchecked Sendable {
             let request = UUID().uuidString.lowercased()
             conversation.draft = sentText; conversation.draftAttachments = [attachment]
             conversation.messages = [Message(author: "Jason", text: sentText, state: "sending", requestId: request, attachments: [attachment]), Message(author: "Codex", text: "", state: "queued", requestId: request)]
-            activeRequest = request; sentDraft = sentText; busy = true; accepted = false; save()
+            addOutgoing(request, Outgoing(saving: false, draft: sentText, attachments: [attachment])); save()
             receiveEvent(["type":"accepted", "requestId":request], generation:generation)
             try? await Task.sleep(for:.milliseconds(150))
             record("accepted send clears composer before any agent replies", conversation.draft.isEmpty && conversation.draftAttachments.isEmpty && busy && conversation.messages.last?.state == "queued")
@@ -1644,7 +1765,7 @@ private final class PersistenceCompletion: @unchecked Sendable {
             receiveEvent(["type":"settled", "requestId":request], generation:generation)
             record("later failure preserves next draft and attachment", conversation.draft == sentText && conversation.draftAttachments.first?.id == next.id && !busy)
             let rejected = UUID().uuidString.lowercased()
-            activeRequest = rejected; sentDraft = sentText; accepted = false; busy = true
+            addOutgoing(rejected, Outgoing(saving: false, draft: sentText))
             receiveEvent(["type":"rejected", "requestId":rejected, "message":"Synthetic rejection before dispatch"], generation:generation)
             record("rejected send keeps original composer draft", conversation.draft == sentText && conversation.draftAttachments.first?.id == next.id && !busy)
             record("rejected send preserves healthy connections", seats["codex"]?.state == "connected")
@@ -1660,7 +1781,7 @@ private final class PersistenceCompletion: @unchecked Sendable {
             }
             if let window = NSApplication.shared.windows.first(where: { $0.title.contains("Silkwire") }), let view = window.contentView, let field = composer(view) {
                 var handlers: [Double] = [], frames: [Double] = []
-                let concurrentRequest = UUID().uuidString.lowercased(); activeRequest = concurrentRequest; busy = true
+                let concurrentRequest = UUID().uuidString.lowercased(); addOutgoing(concurrentRequest, Outgoing(saving: false, accepted: true))
                 conversation.messages.append(Message(author:"Codex", text:"", state:"streaming", requestId:concurrentRequest))
                 let concurrent = Task { @MainActor in
                     for index in 0..<128 {
@@ -1687,7 +1808,7 @@ private final class PersistenceCompletion: @unchecked Sendable {
                 receiveEvent(["type":"settled", "requestId":concurrentRequest], generation:generation)
                 record("reply completion does not erase next draft", conversation.draft == String(repeating:"x",count:80))
                 // Exercise the actual JSON event ingress with 1,000 tiny deltas and a terminal tail.
-                let request = UUID().uuidString.lowercased(); activeRequest = request; busy = true
+                let request = UUID().uuidString.lowercased(); addOutgoing(request, Outgoing(saving: false, accepted: true))
                 conversation.messages.append(Message(author: "Codex", text: "", state: "streaming", requestId: request))
                 let writes = persistenceWriteCount, revision = transcriptRevision
                 for index in 0..<1000 {

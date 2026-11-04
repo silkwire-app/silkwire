@@ -139,8 +139,8 @@ struct FutureDrawer: View {
             }
         }
         .padding(12)
-        .background(SilkwireTheme.accent.opacity(0.07), in: RoundedRectangle(cornerRadius: 10))
-        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(SilkwireTheme.accent.opacity(0.25), lineWidth: 1))
+        .background(SilkwireTheme.northStarsFill, in: RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(SilkwireTheme.northStarsEdge, lineWidth: 1))
     }
     /// Inline Markdown only; a leading list dash reads as a bullet.
     static func inline(_ line: String) -> AttributedString {
@@ -221,7 +221,8 @@ struct FutureDrawer: View {
             }
         }
         .padding(10)
-        .background(SilkwireTheme.wash(item.completed ? 0.025 : 0.05), in: RoundedRectangle(cornerRadius: 8))
+        .background(SilkwireTheme.tile(item.completed ? 0.025 : 0.05), in: RoundedRectangle(cornerRadius: 8))
+        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(SilkwireTheme.midnightEdge, lineWidth: 1))
     }
 }
 
