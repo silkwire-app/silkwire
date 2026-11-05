@@ -28,11 +28,24 @@ enum NativeSandboxState {
         }
         return nil
     }
+    /// SwiftUI's macro plugin ships with Xcode, not the Command Line Tools. Say so
+    /// plainly before anything is created, instead of a wall of compiler errors.
+    static var xcodeProblem: String? {
+        let plugin = "usr/lib/swift/host/plugins/libSwiftUIMacros.dylib", platform = "Platforms/MacOSX.platform/Developer/"
+        let files = FileManager.default
+        if let developer = appleToolchain?.developer, [platform + plugin, plugin].contains(where: { files.fileExists(atPath: developer + "/" + $0) }) { return nil }
+        let xcode = "/Applications/Xcode.app/Contents/Developer"
+        if files.fileExists(atPath: xcode + "/" + platform + plugin) {
+            return "Xcode is installed but not selected. Run this once, then try again:\n  sudo xcode-select -s " + xcode + "\nNothing was built.\n"
+        }
+        return "Silkwire needs the full Xcode app, because the Command Line Tools leave out what SwiftUI needs. Install Xcode from the Mac App Store, open it once, then try again.\nNothing was built.\n"
+    }
 }
 
 
 // Native Apple toolchain only. A verification bundle is separate from the app
 // Jason opens and contains explicitly compiled-in synthetic acceptance fixtures.
+if let problem = NativeSandboxState.xcodeProblem { fputs(problem, stderr); exit(1) }
 let files = FileManager.default
 let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
 let verification = CommandLine.arguments.contains("--verification")
