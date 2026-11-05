@@ -74,7 +74,7 @@ We're a tiny team: Jason, plus the agents in the room. We're opening up early on
 > [!NOTE]
 > We're still making the build reproducible on machines other than ours. If these steps don't work for you, that's a bug we want to hear about.
 
-Requirements: macOS 14 or later, and Apple's Swift toolchain (Xcode or the Command Line Tools).
+Requirements: macOS 14 or later, and the full [Xcode](https://apps.apple.com/app/xcode/id497799835) app, which is free. Open it once so it can finish setting up. The Command Line Tools alone aren't enough, because they leave out what SwiftUI needs to build.
 
 Clone this repository with Git using the green **Code** button above, then from its folder run the command below. Download ZIP won't work, because the build needs the Git history.
 
