@@ -41,15 +41,43 @@ Codex/Claude native runtime tools remain disabled. Plain-text Project reads
 and trusted private edits/builds/tests are brokered by the host app; see
 [Trusted team work](trusted-staging.md). Every provider receives automatic STAGING context, independent of briefs.
 
-## First installation
+## Import for existing owners
 
-On the isolated implementation branch, commit the changes to be tested. Then:
+This imports an existing working Silkwire library; it is not first-time setup
+for someone with only a fresh clone. It requires a valid `workspace.json` with
+conversations and Projects in the source library, a clean committed source
+repository, and a destination Staging library that does not already exist.
+The importer reads the existing working library, so use it only when that
+import is intended. The November 9, 2026 fresh-download check did not run this
+procedure or inspect an owner's library.
+
+There is no supported, verified empty-library Staging setup documented for
+public base `c5508f3d717790c58f52e57c38b07d2faa0a26be`. If you do not have an
+existing working library, stop at building; do not fabricate a workspace file
+or substitute someone else's library. An empty-library bootstrap still needs
+implementation or verification before instructions can be offered.
+
+On an isolated branch, commit the changes to be tested. Set `source_library`
+to the existing working library you intend to import, and `original_source`
+to the original source root recorded in that library's Project folder grant.
+Do not assume it is `~/Projects/silkwire`. Run from the committed repository
+you intend to copy. Replace both placeholder values before running:
 
 ```sh
+source_library="/absolute/path/to/existing/working-library"
+original_source="/absolute/path/to/original/source-root"
 swift Scripts/build.swift --staging
-swift Scripts/seed-staging.swift --source-library "$HOME/Library/Application Support/Silkwire Native Development" --source-repo "$PWD" --original-source "$HOME/Projects/silkwire"
+swift Scripts/seed-staging.swift --source-library "$source_library" --source-repo "$PWD" --original-source "$original_source"
 swift Scripts/install.swift --staging
 ```
+
+The default working library is
+`~/Library/Application Support/Silkwire Native Development`. The import creates
+`~/Library/Application Support/Silkwire Staging`; the install targets
+`/Applications/Silkwire Staging.app`, with backups and receipts under
+`/Applications/Silkwire Staging Backups`. A new source checkout does not isolate
+runtime data. Staging computer control is enabled by default; review the
+[computer-control policy](computer-control.md) before use.
 
 The importer refuses an existing destination. It reads one consistent atomic
 snapshot even while the working app remains open; subsequent working messages
@@ -58,6 +86,10 @@ deleted or mistaken for a completed import. The import receipt records hashes,
 counts, revision and new grant path, never conversation text or credentials.
 
 ## Acceptance
+
+These are procedures for a separately authorized runtime check. They were not
+run in the fresh-download build-only review; neither import, installation,
+Staging launch, nor provider behavior was verified by that review.
 
 ```sh
 swift Scripts/test.swift StagingTests StorageTests RoomTests NativeEveTransportTests

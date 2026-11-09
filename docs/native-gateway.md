@@ -4,6 +4,34 @@ Silkwire's `NativeEveTransport` is Swift application code using Foundation
 `URLSessionWebSocketTask`. It does not embed the Gateway, execute Node, load an
 SDK bundle, or discover another product's installation.
 
+## Prerequisites
+
+These are requirements read from the connector at public commit
+`c5508f3d717790c58f52e57c38b07d2faa0a26be`, not a live integration result.
+The November 9, 2026 fresh-download check built the app only; it did not connect
+to a Gateway or establish a known-compatible OpenClaw release.
+
+Before connecting Eve, prepare these in your own OpenClaw setup:
+
+- A separately installed, configured and running Gateway. Silkwire does not
+  install, configure or start it.
+- The default file `~/.openclaw/openclaw.json`, containing `gateway.mode` set
+  to `local`, `gateway.auth.mode` set to `token`, and a nonempty
+  `gateway.auth.token`. Do not share the token. Alternate config paths and
+  remote or password-mode Gateways are not supported by this connector.
+- A listener at `ws://127.0.0.1:<port>`, using `gateway.port` (default `18789`).
+- Wire protocol **exactly 4** and the `gateway-client` / `backend` connection
+  contract described below, with effective `operator.read` and
+  `operator.write` scopes.
+- An agent with ID **`main`**. Eve's agent ID and room-session namespace are
+  fixed to `main`; the app does not select an arbitrary configured agent.
+- For Staging, also `operator.admin` scope and support for `sessions.create`,
+  `sessions.patch` and `tools.effective`, including the session-specific
+  read-only/wildcard-deny policy. Unconfirmed restrictions block dispatch.
+
+Review the authority boundary below as well as the connection requirements.
+A successful app build does not establish that an existing Gateway meets them.
+
 ## Supported contract
 
 The implementation follows OpenClaw's published **wire protocol v4**, rather
@@ -23,7 +51,8 @@ backend identity or remote endpoint is not silently substituted.
 
 The existing `.openclaw/openclaw.json` token is read into process memory only.
 It is not copied into Silkwire resources, defaults, receipts, logs, or tests.
-The app neither changes sign-in nor modifies Gateway permissions. Gateway error
+The normal connector leaves sign-in and existing Gateway permissions unchanged;
+Staging applies the session-specific restrictions described below. Gateway error
 text is not surfaced; only constrained uppercase machine codes are displayed.
 Usage is **not reported**, not guessed to be unlimited or available.
 
@@ -67,6 +96,10 @@ working connector remains unchanged; the Staging policy never edits main-agent
 configuration, sign-in or the working library.
 
 ## Verification
+
+The following are verification procedures, not checks run by the November 9
+fresh-download review. That review did not run fixtures, send a live turn, or
+validate provider permissions.
 
 Build and run the native Network.framework WebSocket fixtures:
 
