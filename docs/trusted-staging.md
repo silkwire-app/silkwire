@@ -49,6 +49,11 @@ claim integration merely because its private tests passed.
 
 ## Tests and delivered proof
 
+The commands below describe runtime verification and promotion procedures;
+they were not run by the November 9, 2026 fresh-download build-only check.
+That check verified compilation of public base `c5508f3`, not these workflows.
+The installed Staging target is `/Applications/Silkwire Staging.app`.
+
 ```sh
 swift Scripts/test.swift TrustedWorkspaceTests TrustedRoomTests RoomTests StagingTests StorageTests NativeEveTransportTests
 swift Tests/run-transports.swift
@@ -58,7 +63,7 @@ swift Tests/run-transports.swift
 synthetic sessions with the real default connectors. Installed Stage acceptance:
 
 ```sh
-open -g -W -n --env SILKWIRE_STAGING_CHECK=<UUID> --env SILKWIRE_STAGING_TRUST_CHECK=1 "$HOME/Applications/Silkwire Staging.app"
+open -g -W -n --env SILKWIRE_STAGING_CHECK=<UUID> --env SILKWIRE_STAGING_TRUST_CHECK=1 "/Applications/Silkwire Staging.app"
 ```
 
 It uses only the isolated Diagnostics/<UUID> library and has each teammate
@@ -72,7 +77,7 @@ These are programmatic mounted-app checks, not an external UI click-through.
 After testing the exact Staging bundle, quit the working app normally. Run:
 
 ```sh
-swift Scripts/promote-working.swift --source-app "$HOME/Applications/Silkwire Staging.app" --target-app "$HOME/Applications/Silkwire Updated Preview.app" --library "$HOME/Library/Application Support/Silkwire Native Development" --staging-source "$HOME/Library/Application Support/Silkwire Staging/Sources/Silkwire"
+swift Scripts/promote-working.swift --source-app "/Applications/Silkwire Staging.app" --target-app "$HOME/Applications/Silkwire Updated Preview.app" --library "$HOME/Library/Application Support/Silkwire Native Development" --staging-source "$HOME/Library/Application Support/Silkwire Staging/Sources/Silkwire"
 ```
 
 The script requires the working app stopped and its exclusive library lock free.

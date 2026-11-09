@@ -72,8 +72,9 @@ file and line (the library keeps `-O`).
    signature. Provenance: a build's `SilkwireSourceDigest` (new in `build.swift`) is
    matched to a finished workspace's committed head. *Back Up and Install* (with a
    confirmation dialog) refuses an open Staging app, an unsigned candidate, or one that
-   changed since review; moves the installed app to `~/Applications/Silkwire Staging
-   Backups/`, copies, verifies bytes, restores on failure, and saves a receipt.
+   changed since review; moves the installed app to
+   `/Applications/Silkwire Staging Backups/`, copies, verifies bytes, restores on
+   failure, and saves a receipt.
    *Restore…* copies a backup back and keeps what it replaces. Agents have no path to it.
 3. **Web inspection.** `<<INSPECT_WEB {"url","viewport","steps"}>>` for
    `staging.silkwire.si` and `staging.silkwire.app` (https only). Ephemeral WKWebView

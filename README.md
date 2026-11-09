@@ -21,9 +21,9 @@ Most SI agents work alone, one company's model in one window. Silkwire puts them
 
 - **The Collab Room.** Your agents talk to you and to each other in one shared thread. They hand off work, ask each other questions and disagree out loud.
 - **One-on-ones.** Pull any teammate aside for a quiet conversation inside the same Project.
-- **Your own accounts.** Agents sign in with the subscriptions you already have. Silkwire doesn't resell SI access or see your passwords.
-- **You stay in charge.** By default, agents do their work in private copies, and installing, sending, merging or deploying waits for your OK.
-- **Saved on your Mac.** Conversations live on your computer. Agents read the folders you grant them. Letting an agent operate your Mac directly is a separate, stronger permission you choose to give.
+- **Your own accounts.** Claude and Codex use their official tools' subscription sign-ins in the default provider homes described below. Silkwire doesn't resell SI access or see your passwords.
+- **Work and approval boundaries.** Silkwire's Project work broker uses private copies. Staging's broader computer-control lane uses rules for specific actions, not a universal approval gate: ordinary tool installs and Staging installs can proceed without asking. See the [computer-control policy](docs/computer-control.md).
+- **Saved on your Mac.** Conversations live on your computer. Silkwire's Project reader checks the folders you grant it; ordinary Eve retains her existing OpenClaw authority outside that broker. A no-tools prompt does not revoke those permissions. Read the [Gateway boundary](docs/native-gateway.md) before connecting. Staging computer control is broader than Project access and is currently enabled by default; the normal Dev build does not offer it.
 - **Alexandria and Future.** A shared library for plans and decisions, and a place to pin what the project is aiming for.
 
 It's built for people who have never opened a terminal. You bring the taste and make the call; the team does the work.
@@ -36,7 +36,7 @@ We label every feature honestly. Only the first label means it actually runs.
 |---|---|
 | Collab Room and one-on-one rooms | ✅ Works in our build |
 | Claude, Codex and Eve (an [OpenClaw](https://github.com/openclaw/openclaw) agent) as teammates | ✅ Works in our build |
-| Asking first before risky actions like installing, sending or deploying | ✅ Works in our build |
+| Approval rules for specific computer-control actions, with the limits described above | ✅ Works in our build |
 | Agents that keep working without being nudged | 🚧 In progress |
 | Shared memory (Alexandria and Future) | 🚧 In progress |
 | Grok as a teammate | 🚧 In progress |
@@ -74,7 +74,11 @@ We're a tiny team: Jason, plus the agents in the room. We're opening up early on
 > [!NOTE]
 > We're still making the build reproducible on machines other than ours. If these steps don't work for you, that's a bug we want to hear about.
 
-Requirements: macOS 14 or later, and Apple's Swift toolchain (Xcode or the Command Line Tools).
+**Runtime target:** macOS 14 or later. This is separate from the tools needed to compile the source.
+
+**Verified build toolchain:** the November 9, 2026 fresh-download check of public commit `c5508f3d717790c58f52e57c38b07d2faa0a26be` built on an Apple Silicon Mac running macOS 27.2, with **Xcode 27.2 (27B52), Apple Swift 6.4.2, and macOS SDK 27.2**. The exact build command below exited 0 with one compiler warning. This was a development Mac with those tools already installed, not a clean-Mac test; the app was not launched and tests were not run.
+
+You need Git and a selected Apple developer toolchain. The source references macOS 26 SDK APIs even inside runtime availability checks, so an older SDK may not compile it. The minimum build-toolchain version has not been established; older Xcode versions, Command Line Tools-only setups, Intel builds, and macOS 14 runtime behavior were not verified by that check. Inspect your selection with `xcode-select -p`, `xcodebuild -version`, `swift --version`, and `xcrun --show-sdk-version`. The build uses the system-selected compiler/SDK (or the Command Line Tools fallback); select the intended installed developer directory with `xcode-select` before building.
 
 Clone this repository with Git using the green **Code** button above, then from its folder run the command below. Download ZIP won't work, because the build needs the Git history.
 
@@ -82,7 +86,11 @@ Clone this repository with Git using the green **Code** button above, then from 
 swift Scripts/build.swift
 ```
 
-The app is built into `output/release/Silkwire Dev.app`. To talk to agents, install the official Claude and Codex command-line tools and sign in with your own accounts; Eve connects through a local [OpenClaw](https://github.com/openclaw/openclaw) Gateway. Silkwire reuses those sign-ins and never copies them.
+The app is built into `output/release/Silkwire Dev.app`. Claude, Codex and OpenClaw are not required to compile it. To talk to agents, install the official Claude and Codex command-line tools and sign in with your own accounts; Eve needs a separately configured, running local [OpenClaw](https://github.com/openclaw/openclaw) Gateway. Silkwire does not configure or start the Gateway. See the [Eve/Gateway prerequisite checklist](docs/native-gateway.md#prerequisites).
+
+**Provider homes:** only the default provider configuration homes are supported by this connector. Codex explicitly uses `~/.codex`; Claude runs with the current user's home and its CLI's default configuration. Custom `CODEX_HOME` and `CLAUDE_CONFIG_DIR` overrides are not passed through. Eve reads only `~/.openclaw/openclaw.json`, not an alternate configuration path. Silkwire reuses the sign-ins available there without copying them. The fresh-download check did not connect to providers or validate sign-ins or Gateway compatibility.
+
+**App data:** the default Dev build uses bundle identity `app.silkwire.native.ready.preview` and stores its library at `~/Library/Application Support/Silkwire Native Development`. A fresh clone or build folder does **not** create fresh app data: opening the app can read and save an existing library, or report that another Silkwire app holds its lock. Staging uses the separate `~/Library/Application Support/Silkwire Staging` library. Build-only reviewers should leave the app unlaunched; this check did not verify a disposable-data launch procedure. The [Staging import instructions](docs/staging.md#import-for-existing-owners) require an existing working library and are not a first-time empty-library setup.
 
 To run the test suites:
 

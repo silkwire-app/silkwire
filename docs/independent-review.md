@@ -79,8 +79,8 @@ output/installer/silkwire-staging-installer review 'output/staging/Silkwire Stag
 Quit Staging normally. Run `install APP EXPECTED_MANIFEST` with the exact full
 manifest returned by review. The helper rechecks the candidate, keeps the old app,
 copies and verifies the new app, and saves an install receipt under
-`~/Applications/Silkwire Staging Backups/Install Receipts`. This replaces only
-`~/Applications/Silkwire Staging.app`. Do not seed an existing Staging library,
+`/Applications/Silkwire Staging Backups/Install Receipts`. This replaces only
+`/Applications/Silkwire Staging.app`. Do not seed an existing Staging library,
 promote into the working app, or restore older conversation data.
 
 For recovery, quit Staging, use `backups`, then `review BACKUP_APP`, then
